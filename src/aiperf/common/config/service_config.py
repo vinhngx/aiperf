@@ -3,14 +3,12 @@
 from typing import Annotated
 
 from pydantic import Field, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing_extensions import Self
 
 from aiperf.common.aiperf_logger import AIPerfLogger
-from aiperf.common.config.base_config import ADD_TO_TEMPLATE
+from aiperf.common.config.base_config import ADD_TO_TEMPLATE, BaseConfig
 from aiperf.common.config.cli_parameter import CLIParameter, DisableCLI
 from aiperf.common.config.config_defaults import ServiceDefaults
-from aiperf.common.config.dev_config import DeveloperConfig
 from aiperf.common.config.groups import Groups
 from aiperf.common.config.worker_config import WorkersConfig
 from aiperf.common.config.zmq_config import (
@@ -27,15 +25,8 @@ from aiperf.common.enums import (
 _logger = AIPerfLogger(__name__)
 
 
-class ServiceConfig(BaseSettings):
+class ServiceConfig(BaseConfig):
     """Base configuration for all services. It will be provided to all services during their __init__ function."""
-
-    model_config = SettingsConfigDict(
-        env_prefix="AIPERF_",
-        env_file=".env",
-        env_file_encoding="utf-8",
-        extra="allow",
-    )
 
     _CLI_GROUP = Groups.SERVICE
     _comm_config: BaseZMQCommunicationConfig | None = None
@@ -47,6 +38,19 @@ class ServiceConfig(BaseSettings):
             self.log_level = AIPerfLogLevel.TRACE
         elif self.verbose:
             self.log_level = AIPerfLogLevel.DEBUG
+        return self
+
+    @model_validator(mode="after")
+    def validate_ui_type_from_verbose_flags(self) -> Self:
+        """Set UI type based on verbose flags."""
+        # If the user has explicitly set the UI type, use that.
+        if "ui_type" in self.model_fields_set:
+            return self
+
+        # If the user selected verbose or extra verbose flags, set the UI type to simple.
+        # This will allow the user to see the verbose output in the console easier.
+        if self.verbose or self.extra_verbose:
+            self.ui_type = AIPerfUIType.SIMPLE
         return self
 
     @model_validator(mode="after")
@@ -158,8 +162,6 @@ class ServiceConfig(BaseSettings):
             group=_CLI_GROUP,
         ),
     ] = ServiceDefaults.UI_TYPE
-
-    developer: DeveloperConfig = DeveloperConfig()
 
     @property
     def comm_config(self) -> BaseZMQCommunicationConfig:

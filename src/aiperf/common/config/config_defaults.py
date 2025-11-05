@@ -4,7 +4,6 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from aiperf.common.constants import AIPERF_DEV_MODE
 from aiperf.common.enums import (
     AIPerfLogLevel,
     AIPerfUIType,
@@ -20,6 +19,7 @@ from aiperf.common.enums import (
     VideoFormat,
     VideoSynthType,
 )
+from aiperf.common.enums.dataset_enums import DatasetSamplingStrategy
 
 
 #
@@ -53,6 +53,7 @@ class InputDefaults:
     GOODPUT = None
     PUBLIC_DATASET = None
     CUSTOM_DATASET_TYPE = None
+    DATASET_SAMPLING_STRATEGY = DatasetSamplingStrategy.SHUFFLE
     RANDOM_SEED = None
     NUM_DATASET_ENTRIES = 100
 
@@ -93,6 +94,7 @@ class VideoDefaults:
 @dataclass(frozen=True)
 class PromptDefaults:
     BATCH_SIZE = 1
+    NUM = 100
 
 
 @dataclass(frozen=True)
@@ -135,9 +137,17 @@ class OutputDefaults:
     INPUTS_JSON_FILE = Path("inputs.json")
     PROFILE_EXPORT_AIPERF_CSV_FILE = Path("profile_export_aiperf.csv")
     PROFILE_EXPORT_AIPERF_JSON_FILE = Path("profile_export_aiperf.json")
+    PROFILE_EXPORT_AIPERF_TIMESLICES_CSV_FILE = Path(
+        "profile_export_aiperf_timeslices.csv"
+    )
+    PROFILE_EXPORT_AIPERF_TIMESLICES_JSON_FILE = Path(
+        "profile_export_aiperf_timeslices.json"
+    )
     PROFILE_EXPORT_JSONL_FILE = Path("profile_export.jsonl")
     PROFILE_EXPORT_RAW_JSONL_FILE = Path("profile_export_raw.jsonl")
+    PROFILE_EXPORT_GPU_TELEMETRY_JSONL_FILE = Path("gpu_telemetry_export.jsonl")
     EXPORT_LEVEL = ExportLevel.RECORDS
+    SLICE_DURATION = None
 
 
 @dataclass(frozen=True)
@@ -183,19 +193,3 @@ class LoadGeneratorDefaults:
 class WorkersDefaults:
     MIN = None
     MAX = None
-
-
-@dataclass(frozen=True)
-class DevDefaults:
-    if AIPERF_DEV_MODE:
-        ENABLE_YAPPI = False
-        DEBUG_SERVICES = None
-        TRACE_SERVICES = None
-        SHOW_INTERNAL_METRICS = True
-        DISABLE_UVLOOP = False
-    else:
-        ENABLE_YAPPI = False
-        DEBUG_SERVICES = None
-        TRACE_SERVICES = None
-        SHOW_INTERNAL_METRICS = False
-        DISABLE_UVLOOP = False

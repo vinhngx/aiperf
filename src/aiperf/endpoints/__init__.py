@@ -4,8 +4,20 @@
 from aiperf.endpoints.base_endpoint import (
     BaseEndpoint,
 )
+from aiperf.endpoints.base_rankings_endpoint import (
+    BaseRankingsEndpoint,
+)
+from aiperf.endpoints.cohere_rankings import (
+    CohereRankingsEndpoint,
+)
+from aiperf.endpoints.hf_tei_rankings import (
+    HFTeiRankingsEndpoint,
+)
+from aiperf.endpoints.huggingface_generate import (
+    HuggingFaceGenerateEndpoint,
+)
 from aiperf.endpoints.nim_rankings import (
-    RankingsEndpoint,
+    NIMRankingsEndpoint,
 )
 from aiperf.endpoints.openai_chat import (
     ChatEndpoint,
@@ -16,11 +28,23 @@ from aiperf.endpoints.openai_completions import (
 from aiperf.endpoints.openai_embeddings import (
     EmbeddingsEndpoint,
 )
+from aiperf.endpoints.solido_rag import (
+    SolidoEndpoint,
+)
+from aiperf.endpoints.template_endpoint import (
+    TemplateEndpoint,
+)
 
 __all__ = [
     "BaseEndpoint",
+    "BaseRankingsEndpoint",
     "ChatEndpoint",
+    "CohereRankingsEndpoint",
     "CompletionsEndpoint",
     "EmbeddingsEndpoint",
-    "RankingsEndpoint",
+    "HFTeiRankingsEndpoint",
+    "HuggingFaceGenerateEndpoint",
+    "NIMRankingsEndpoint",
+    "SolidoEndpoint",
+    "TemplateEndpoint",
 ]

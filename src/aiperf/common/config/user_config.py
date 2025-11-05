@@ -19,7 +19,7 @@ from aiperf.common.config.input_config import InputConfig
 from aiperf.common.config.loadgen_config import LoadGeneratorConfig
 from aiperf.common.config.output_config import OutputConfig
 from aiperf.common.config.tokenizer_config import TokenizerConfig
-from aiperf.common.enums import CustomDatasetType
+from aiperf.common.enums import CustomDatasetType, GPUTelemetryMode
 from aiperf.common.enums.timing_enums import RequestRateMode, TimingMode
 from aiperf.common.utils import load_json_str
 
@@ -224,6 +224,44 @@ class UserConfig(BaseConfig):
         ),
     ]
 
+    _gpu_telemetry_mode: GPUTelemetryMode = GPUTelemetryMode.SUMMARY
+    _gpu_telemetry_urls: list[str] = []
+
+    @model_validator(mode="after")
+    def _parse_gpu_telemetry_config(self) -> Self:
+        """Parse gpu_telemetry list into mode and URLs."""
+        if not self.gpu_telemetry:
+            return self
+
+        mode = GPUTelemetryMode.SUMMARY
+        urls = []
+
+        for item in self.gpu_telemetry:
+            if item in ["dashboard"]:
+                mode = GPUTelemetryMode.REALTIME_DASHBOARD
+            elif item.startswith("http") or ":" in item:
+                normalized_url = item if item.startswith("http") else f"http://{item}"
+                urls.append(normalized_url)
+
+        self._gpu_telemetry_mode = mode
+        self._gpu_telemetry_urls = urls
+        return self
+
+    @property
+    def gpu_telemetry_mode(self) -> GPUTelemetryMode:
+        """Get the GPU telemetry display mode (parsed from gpu_telemetry list)."""
+        return self._gpu_telemetry_mode
+
+    @gpu_telemetry_mode.setter
+    def gpu_telemetry_mode(self, value: GPUTelemetryMode) -> None:
+        """Set the GPU telemetry display mode."""
+        self._gpu_telemetry_mode = value
+
+    @property
+    def gpu_telemetry_urls(self) -> list[str]:
+        """Get the parsed GPU telemetry DCGM endpoint URLs."""
+        return self._gpu_telemetry_urls
+
     @model_validator(mode="after")
     def _compute_config(self) -> Self:
         """Compute additional configuration.
@@ -295,18 +333,17 @@ class UserConfig(BaseConfig):
         """Get the timing mode based on the user config."""
         return self._timing_mode
 
-    # TODO: disable until num-dataset-entries is separated from num-conversation
-    # @model_validator(mode="after")
-    # def validate_multi_turn_options(self) -> Self:
-    #     """Validate multi-turn options."""
-    #     # Multi-turn validation: only one of request_count or num_sessions should be set
-    #     if (
-    #         "request_count" in self.loadgen.model_fields_set
-    #         and "num" in self.input.conversation.model_fields_set
-    #     ):
-    #         raise ValueError(
-    #             "Both a request-count and number of conversations are set. This can result in confusing output. "
-    #             "Use only --conversation-num for multi-turn scenarios."
-    #         )
+    @model_validator(mode="after")
+    def validate_multi_turn_options(self) -> Self:
+        """Validate multi-turn options."""
+        # Multi-turn validation: only one of request_count or num_sessions should be set
+        if (
+            "request_count" in self.loadgen.model_fields_set
+            and "num" in self.input.conversation.model_fields_set
+        ):
+            raise ValueError(
+                "Both a request-count and number of conversations are set. This can result in confusing output. "
+                "Use only --conversation-num for multi-turn scenarios."
+            )
 
-    #     return self
+        return self

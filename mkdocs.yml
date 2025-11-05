@@ -11,12 +11,16 @@ nav:
     - CLI Options: cli_options.md
     - Migrating from GenAI-Perf: migrating.md
   - Advanced Features:
+    - Multi-Turn Conversations: tutorials/multi-turn.md
     - Request Cancellation: tutorials/request-cancellation.md
     - Trace Benchmarking: tutorials/trace-benchmarking.md
     - Fixed Schedule: tutorials/fixed-schedule.md
     - Time-based Benchmarking: tutorials/time-based-benchmarking.md
     - Sequence Distributions: tutorials/sequence-distributions.md
     - Goodput: tutorials/goodput.md
+    - Request Rate with Max Concurrency: tutorials/request-rate-concurrency.md
+    - GPU Telemetry: tutorials/gpu-telemetry.md
+    - Template Endpoint: tutorials/template-endpoint.md
   - Reference:
     - Architecture: architecture.md
     - Benchmark Datasets: benchmark_datasets.md

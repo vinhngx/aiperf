@@ -10,12 +10,15 @@ class ConsoleExporterType(CaseInsensitiveStrEnum):
     INTERNAL_METRICS = "internal_metrics"
     METRICS = "metrics"
     TELEMETRY = "telemetry"
+    USAGE_DISCREPANCY_WARNING = "usage_discrepancy_warning"
 
 
 class DataExporterType(CaseInsensitiveStrEnum):
     JSON = "json"
     CSV = "csv"
     RAW_RECORD_AGGREGATOR = "raw_record_aggregator"
+    TIMESLICE_JSON = "timeslice_json"
+    TIMESLICE_CSV = "timeslice_csv"
 
 
 class ExportLevel(CaseInsensitiveStrEnum):

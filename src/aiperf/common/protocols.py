@@ -5,15 +5,8 @@ import asyncio
 from collections.abc import Callable, Coroutine
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
-from aiperf.common.constants import (
-    DEFAULT_COMMS_REQUEST_TIMEOUT,
-    DEFAULT_SERVICE_REGISTRATION_TIMEOUT,
-    DEFAULT_SERVICE_START_TIMEOUT,
-)
-from aiperf.common.enums import (
-    CommClientType,
-    LifecycleState,
-)
+from aiperf.common.enums import CommClientType, LifecycleState
+from aiperf.common.environment import Environment
 from aiperf.common.hooks import Hook, HookType
 from aiperf.common.models import (
     MetricRecordMetadata,
@@ -174,7 +167,7 @@ class RequestClientProtocol(CommunicationClientProtocol, Protocol):
     async def request(
         self,
         message: MessageT,
-        timeout: float = DEFAULT_COMMS_REQUEST_TIMEOUT,
+        timeout: float = Environment.SERVICE.COMMS_REQUEST_TIMEOUT,
     ) -> MessageOutputT: ...
 
     async def request_async(
@@ -339,6 +332,18 @@ class DataExporterProtocol(Protocol):
 
 
 @runtime_checkable
+class DatasetSamplingStrategyProtocol(Protocol):
+    """
+    Protocol for dataset sampling strategies.
+    Any class implementing this protocol will be provided a list of conversation ids, and must
+    provide a `next_conversation_id` method that returns the next conversation id, ensuring reproducibility.
+    """
+
+    def __init__(self, conversation_ids: list[str], **kwargs) -> None: ...
+    def next_conversation_id(self) -> str: ...
+
+
+@runtime_checkable
 class EndpointProtocol(Protocol):
     """Protocol for an endpoint."""
 
@@ -452,13 +457,13 @@ class ServiceManagerProtocol(AIPerfLifecycleProtocol, Protocol):
     async def wait_for_all_services_registration(
         self,
         stop_event: asyncio.Event,
-        timeout_seconds: float = DEFAULT_SERVICE_REGISTRATION_TIMEOUT,
+        timeout_seconds: float = Environment.SERVICE.REGISTRATION_TIMEOUT,
     ) -> None: ...
 
     async def wait_for_all_services_start(
         self,
         stop_event: asyncio.Event,
-        timeout_seconds: float = DEFAULT_SERVICE_START_TIMEOUT,
+        timeout_seconds: float = Environment.SERVICE.START_TIMEOUT,
     ) -> None: ...
 
 

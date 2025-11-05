@@ -7,9 +7,14 @@ from aiperf.dataset.composer import (
     SyntheticDatasetComposer,
 )
 from aiperf.dataset.dataset_manager import (
-    DATASET_CONFIGURATION_TIMEOUT,
     DatasetManager,
     main,
+)
+from aiperf.dataset.dataset_samplers import (
+    BaseDatasetSampler,
+    RandomSampler,
+    SequentialSampler,
+    ShuffleSampler,
 )
 from aiperf.dataset.generator import (
     DEFAULT_CORPUS_FILE,
@@ -23,6 +28,8 @@ from aiperf.dataset.generator import (
 )
 from aiperf.dataset.loader import (
     AIPERF_DATASET_CACHE_DIR,
+    BaseFileLoader,
+    BaseLoader,
     BasePublicDatasetLoader,
     CustomDatasetLoaderProtocol,
     CustomDatasetT,
@@ -41,21 +48,20 @@ from aiperf.dataset.utils import (
     check_file_exists,
     encode_image,
     open_image,
-    sample_normal,
-    sample_positive_normal,
-    sample_positive_normal_integer,
 )
 
 __all__ = [
     "AIPERF_DATASET_CACHE_DIR",
     "AudioGenerator",
     "BaseDatasetComposer",
+    "BaseDatasetSampler",
+    "BaseFileLoader",
     "BaseGenerator",
+    "BaseLoader",
     "BasePublicDatasetLoader",
     "CustomDatasetComposer",
     "CustomDatasetLoaderProtocol",
     "CustomDatasetT",
-    "DATASET_CONFIGURATION_TIMEOUT",
     "DEFAULT_CORPUS_FILE",
     "DatasetManager",
     "ImageGenerator",
@@ -68,8 +74,11 @@ __all__ = [
     "PromptGenerator",
     "RandomPool",
     "RandomPoolDatasetLoader",
+    "RandomSampler",
     "SUPPORTED_BIT_DEPTHS",
+    "SequentialSampler",
     "ShareGPTLoader",
+    "ShuffleSampler",
     "SingleTurn",
     "SingleTurnDatasetLoader",
     "SyntheticDatasetComposer",
@@ -78,7 +87,4 @@ __all__ = [
     "encode_image",
     "main",
     "open_image",
-    "sample_normal",
-    "sample_positive_normal",
-    "sample_positive_normal_integer",
 ]

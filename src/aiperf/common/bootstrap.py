@@ -6,10 +6,10 @@ import contextlib
 import multiprocessing
 import os
 import platform
-import random
 import sys
 
 from aiperf.common.config import ServiceConfig, UserConfig
+from aiperf.common.environment import Environment
 from aiperf.common.protocols import ServiceProtocol
 
 
@@ -52,7 +52,7 @@ def bootstrap_and_run_service(
         user_config = load_user_config()
 
     async def _run_service():
-        if service_config.developer.enable_yappi:
+        if Environment.DEV.ENABLE_YAPPI:
             _start_yappi_profiling()
 
         from aiperf.module_loader import ensure_modules_loaded
@@ -98,14 +98,12 @@ def bootstrap_and_run_service(
                     # Silently continue if FD operations fail
                     pass
 
-        if user_config.input.random_seed is not None:
-            random.seed(user_config.input.random_seed)
-            # Try and set the numpy random seed
-            # https://numpy.org/doc/stable/reference/random/index.html#random-quick-start
-            with contextlib.suppress(ImportError):
-                import numpy as np
+        # Initialize global RandomGenerator for reproducible random number generation
+        from aiperf.common import random_generator as rng
 
-                np.random.seed(user_config.input.random_seed)
+        # Always reset and then initialize the global random generator to ensure a clean state
+        rng.reset()
+        rng.init(user_config.input.random_seed)
 
         try:
             await service.initialize()
@@ -114,11 +112,11 @@ def bootstrap_and_run_service(
         except Exception as e:
             service.exception(f"Unhandled exception in service: {e}")
 
-        if service_config.developer.enable_yappi:
+        if Environment.DEV.ENABLE_YAPPI:
             _stop_yappi_profiling(service.service_id, user_config)
 
     with contextlib.suppress(asyncio.CancelledError):
-        if not service_config.developer.disable_uvloop:
+        if not Environment.SERVICE.DISABLE_UVLOOP:
             import uvloop
 
             uvloop.run(_run_service())

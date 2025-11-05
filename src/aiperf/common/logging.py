@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+import asyncio
 import logging
 import multiprocessing
 import queue
@@ -13,10 +14,8 @@ from aiperf.common.aiperf_logger import _DEBUG, _TRACE, AIPerfLogger
 from aiperf.common.config import ServiceConfig, ServiceDefaults, UserConfig
 from aiperf.common.config.config_defaults import OutputDefaults
 from aiperf.common.enums import AIPerfUIType, ServiceType
+from aiperf.common.environment import Environment
 from aiperf.common.factories import ServiceFactory
-
-LOG_QUEUE_MAXSIZE = 1000
-
 
 _logger = AIPerfLogger(__name__)
 _global_log_queue: "multiprocessing.Queue | None" = None
@@ -32,11 +31,13 @@ def get_global_log_queue() -> multiprocessing.Queue:
     if _global_log_queue is None:
         with _log_queue_lock:
             if _global_log_queue is None:
-                _global_log_queue = multiprocessing.Queue(maxsize=LOG_QUEUE_MAXSIZE)
+                _global_log_queue = multiprocessing.Queue(
+                    maxsize=Environment.LOGGING.QUEUE_MAXSIZE
+                )
     return _global_log_queue
 
 
-def cleanup_global_log_queue() -> None:
+async def cleanup_global_log_queue() -> None:
     """Clean up the global log queue to prevent semaphore leaks.
 
     This should be called during shutdown to properly close and join the queue,
@@ -48,7 +49,9 @@ def cleanup_global_log_queue() -> None:
         if _global_log_queue is not None:
             try:
                 _global_log_queue.close()
-                _global_log_queue.join_thread()
+                await asyncio.wait_for(
+                    asyncio.to_thread(_global_log_queue.join_thread), timeout=1.0
+                )
                 _logger.debug("Cleaned up global log queue")
             except Exception as e:
                 _logger.debug(f"Error cleaning up log queue: {e}")
@@ -98,12 +101,12 @@ def setup_child_process_logging(
 
         if service_id:
             # If the service is in the trace or debug services, set the level to trace or debug
-            if service_config.developer.trace_services and _is_service_in_types(
-                service_id, service_config.developer.trace_services
+            if Environment.DEV.TRACE_SERVICES and _is_service_in_types(
+                service_id, Environment.DEV.TRACE_SERVICES
             ):
                 level = _TRACE
-            elif service_config.developer.debug_services and _is_service_in_types(
-                service_id, service_config.developer.debug_services
+            elif Environment.DEV.DEBUG_SERVICES and _is_service_in_types(
+                service_id, Environment.DEV.DEBUG_SERVICES
             ):
                 level = _DEBUG
 

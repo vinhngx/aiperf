@@ -40,6 +40,8 @@ from aiperf.common.models.export_models import (
     JsonMetricResult,
     TelemetryExportData,
     TelemetrySummary,
+    TimesliceCollectionExportData,
+    TimesliceData,
 )
 from aiperf.common.models.health_models import (
     CPUTimes,
@@ -77,6 +79,7 @@ from aiperf.common.models.record_models import (
     ParsedResponseRecord,
     ProcessRecordsResult,
     ProfileResults,
+    RAGSources,
     RankingsResponseData,
     RawRecordInfo,
     ReasoningResponseData,
@@ -108,6 +111,9 @@ from aiperf.common.models.telemetry_models import (
     TelemetryMetrics,
     TelemetryRecord,
     TelemetryResults,
+)
+from aiperf.common.models.usage_models import (
+    Usage,
 )
 from aiperf.common.models.worker_models import (
     WorkerTaskStats,
@@ -158,6 +164,7 @@ __all__ = [
     "ProcessTelemetryResult",
     "ProcessingStats",
     "ProfileResults",
+    "RAGSources",
     "RankingsResponseData",
     "RawRecordInfo",
     "ReasoningResponseData",
@@ -181,8 +188,11 @@ __all__ = [
     "Text",
     "TextResponse",
     "TextResponseData",
+    "TimesliceCollectionExportData",
+    "TimesliceData",
     "TransportMetadata",
     "Turn",
+    "Usage",
     "Video",
     "WorkerStats",
     "WorkerTaskStats",

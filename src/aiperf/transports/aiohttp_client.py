@@ -6,6 +6,7 @@ from typing import Any
 
 import aiohttp
 
+from aiperf.common.exceptions import SSEResponseError
 from aiperf.common.mixins import AIPerfLoggerMixin
 from aiperf.common.models import (
     ErrorDetails,
@@ -102,6 +103,7 @@ class AioHttpClient(AIPerfLoggerMixin):
                     ):
                         # Parse SSE stream with optimal performance
                         async for message in AsyncSSEStreamReader(response.content):
+                            AsyncSSEStreamReader.inspect_message_for_error(message)
                             record.responses.append(message)
                     else:
                         raw_response = await response.text()
@@ -114,7 +116,10 @@ class AioHttpClient(AIPerfLoggerMixin):
                             )
                         )
                     record.end_perf_ns = time.perf_counter_ns()
-
+        except SSEResponseError as e:
+            record.end_perf_ns = time.perf_counter_ns()
+            self.error(f"Error in SSE response: {e!r}")
+            record.error = ErrorDetails.from_exception(e)
         except Exception as e:
             record.end_perf_ns = time.perf_counter_ns()
             self.error(f"Error in aiohttp request: {e!r}")
@@ -156,19 +161,8 @@ def create_tcp_connector(**kwargs) -> aiohttp.TCPConnector:
         SocketDefaults.apply_to_socket(sock)
         return sock
 
-    default_kwargs: dict[str, Any] = {
-        "limit": AioHttpDefaults.LIMIT,
-        "limit_per_host": AioHttpDefaults.LIMIT_PER_HOST,
-        "ttl_dns_cache": AioHttpDefaults.TTL_DNS_CACHE,
-        "use_dns_cache": AioHttpDefaults.USE_DNS_CACHE,
-        "enable_cleanup_closed": AioHttpDefaults.ENABLE_CLEANUP_CLOSED,
-        "force_close": AioHttpDefaults.FORCE_CLOSE,
-        "keepalive_timeout": AioHttpDefaults.KEEPALIVE_TIMEOUT,
-        "happy_eyeballs_delay": AioHttpDefaults.HAPPY_EYEBALLS_DELAY,
-        "family": AioHttpDefaults.SOCKET_FAMILY,
-        "socket_factory": socket_factory,
-    }
-
+    default_kwargs: dict[str, Any] = AioHttpDefaults.get_default_kwargs()
+    default_kwargs["socket_factory"] = socket_factory
     default_kwargs.update(kwargs)
 
     return aiohttp.TCPConnector(

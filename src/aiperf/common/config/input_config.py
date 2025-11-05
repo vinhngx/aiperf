@@ -6,6 +6,8 @@ from typing import Annotated, Any
 from pydantic import BeforeValidator, Field, model_validator
 from typing_extensions import Self
 
+from aiperf.common import random_generator as rng
+from aiperf.common.aiperf_logger import AIPerfLogger
 from aiperf.common.config.audio_config import AudioConfig
 from aiperf.common.config.base_config import BaseConfig
 from aiperf.common.config.cli_parameter import CLIParameter
@@ -21,7 +23,10 @@ from aiperf.common.config.image_config import ImageConfig
 from aiperf.common.config.prompt_config import PromptConfig
 from aiperf.common.config.video_config import VideoConfig
 from aiperf.common.enums import CustomDatasetType, PublicDatasetType
-from aiperf.common.exceptions import MetricTypeError
+from aiperf.common.enums.dataset_enums import DatasetSamplingStrategy
+from aiperf.common.exceptions import InvalidStateError, MetricTypeError
+
+_logger = AIPerfLogger(__name__)
 
 
 class InputConfig(BaseConfig):
@@ -30,6 +35,20 @@ class InputConfig(BaseConfig):
     """
 
     _CLI_GROUP = Groups.INPUT
+
+    @model_validator(mode="before")
+    @classmethod
+    def initialize_rng(cls, data: dict) -> dict:
+        """Initialize RNG with random seed before any field validation."""
+        if isinstance(data, dict):
+            seed = data.get("random_seed")
+            # Initialize RNG if not already initialized
+            try:
+                rng.init(seed)
+            except InvalidStateError:
+                # Already initialized, that's fine - skip reinitialization
+                _logger.debug("RNG already initialized, skipping reinitialization")
+        return data
 
     @model_validator(mode="after")
     def validate_fixed_schedule(self) -> Self:
@@ -91,6 +110,26 @@ class InputConfig(BaseConfig):
                     raise ValueError(
                         f"Metric '{tag}' is a Derived metric and cannot be used for --goodput. "
                         "Use a per-record metric instead (e.g., 'inter_token_latency', 'time_to_first_token')."
+                    )
+
+        return self
+
+    @model_validator(mode="after")
+    def validate_dataset_sampling_strategy(self) -> Self:
+        """Validate the dataset sampling strategy configuration."""
+        if self.dataset_sampling_strategy is None:
+            match self.custom_dataset_type:
+                case CustomDatasetType.RANDOM_POOL:
+                    self.dataset_sampling_strategy = DatasetSamplingStrategy.SHUFFLE
+                case (
+                    CustomDatasetType.MOONCAKE_TRACE
+                    | CustomDatasetType.SINGLE_TURN
+                    | CustomDatasetType.MULTI_TURN
+                ):
+                    self.dataset_sampling_strategy = DatasetSamplingStrategy.SEQUENTIAL
+                case _:
+                    self.dataset_sampling_strategy = (
+                        InputDefaults.DATASET_SAMPLING_STRATEGY
                     )
 
         return self
@@ -227,6 +266,21 @@ class InputConfig(BaseConfig):
             show_choices=False,
         ),
     ] = InputDefaults.CUSTOM_DATASET_TYPE
+
+    dataset_sampling_strategy: Annotated[
+        DatasetSamplingStrategy | None,
+        Field(
+            description="The strategy to use for sampling the dataset.\n"
+            "`sequential`: Iterate through the dataset sequentially, then wrap around to the beginning.\n"
+            "`random`: Randomly select a conversation from the dataset. Will randomly sample with replacement.\n"
+            "`shuffle`: Shuffle the dataset and iterate through it. Will randomly sample without replacement.\n"
+            "Once the end of the dataset is reached, shuffle the dataset again and start over.",
+        ),
+        CLIParameter(
+            name=("--dataset-sampling-strategy",),
+            group=_CLI_GROUP,
+        ),
+    ] = None
 
     random_seed: Annotated[
         int | None,

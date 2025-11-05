@@ -119,6 +119,24 @@ class InferenceClientError(AIPerfError):
     """Exception raised when a inference client encounters an error."""
 
 
+class InvalidInferenceResultError(AIPerfError):
+    """Exception raised when an inference result is invalid."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+        self.notes = []
+
+    def add_note(self, note: str) -> None:
+        self.notes.append(note)
+
+    def __str__(self) -> str:
+        return f"{self.message}: {', '.join(self.notes)}"
+
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__}('{self.__str__()}')"
+
+
 class InvalidOperationError(AIPerfError):
     """Exception raised when an operation is invalid."""
 
@@ -165,6 +183,14 @@ class ProxyError(AIPerfError):
 
 class ShutdownError(AIPerfError):
     """Exception raised when a service encounters an error while shutting down."""
+
+
+class SSEResponseError(AIPerfError):
+    """Exception raised when a SSE response contains an error."""
+
+    def __init__(self, message: str, error_code: int = 500) -> None:
+        self.error_code = error_code
+        super().__init__(message)
 
 
 class UnsupportedHookError(AIPerfError):

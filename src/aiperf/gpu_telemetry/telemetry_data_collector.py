@@ -2,21 +2,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
-import inspect
 import time
 from collections.abc import Awaitable, Callable
 
 import aiohttp
 from prometheus_client.parser import text_string_to_metric_families
 
+from aiperf.common.environment import Environment
 from aiperf.common.hooks import background_task, on_init, on_stop
 from aiperf.common.mixins.aiperf_lifecycle_mixin import AIPerfLifecycleMixin
 from aiperf.common.models import ErrorDetails, TelemetryMetrics, TelemetryRecord
 from aiperf.gpu_telemetry.constants import (
     DCGM_TO_FIELD_MAPPING,
-    DEFAULT_COLLECTION_INTERVAL,
     SCALING_FACTORS,
-    URL_REACHABILITY_TIMEOUT,
 )
 
 __all__ = ["TelemetryDataCollector"]
@@ -37,25 +35,28 @@ class TelemetryDataCollector(AIPerfLifecycleMixin):
     Args:
         dcgm_url: URL of the DCGM metrics endpoint (e.g., "http://localhost:9400/metrics")
         collection_interval: Interval in seconds between metric collections (default: 1.0)
-        record_callback: Optional async/sync callback to receive collected records.
-            Signature: (records: list[TelemetryRecord], collector_id: str) -> None
-        error_callback: Optional async/sync callback to receive collection errors.
-            Signature: (error: ErrorDetails, collector_id: str) -> None
+        record_callback: Optional async callback to receive collected records.
+            Signature: async (records: list[TelemetryRecord], collector_id: str) -> None
+        error_callback: Optional async callback to receive collection errors.
+            Signature: async (error: ErrorDetails, collector_id: str) -> None
         collector_id: Unique identifier for this collector instance
     """
 
     def __init__(
         self,
         dcgm_url: str,
-        collection_interval: float = DEFAULT_COLLECTION_INTERVAL,
-        record_callback: Callable[[list[TelemetryRecord], str], Awaitable[None] | None]
+        collection_interval: float | None = None,
+        record_callback: Callable[[list[TelemetryRecord], str], Awaitable[None]]
         | None = None,
-        error_callback: Callable[[ErrorDetails, str], Awaitable[None] | None]
-        | None = None,
+        error_callback: Callable[[ErrorDetails, str], Awaitable[None]] | None = None,
         collector_id: str = "telemetry_collector",
     ) -> None:
         self._dcgm_url = dcgm_url
-        self._collection_interval = collection_interval
+        self._collection_interval = (
+            collection_interval
+            if collection_interval is not None
+            else Environment.GPU.COLLECTION_INTERVAL
+        )
         self._record_callback = record_callback
         self._error_callback = error_callback
         self._scaling_factors = SCALING_FACTORS
@@ -70,7 +71,7 @@ class TelemetryDataCollector(AIPerfLifecycleMixin):
         Called automatically by AIPerfLifecycleMixin during initialization phase.
         Creates an aiohttp ClientSession with appropriate timeout settings.
         """
-        timeout = aiohttp.ClientTimeout(total=URL_REACHABILITY_TIMEOUT)
+        timeout = aiohttp.ClientTimeout(total=Environment.GPU.REACHABILITY_TIMEOUT)
         self._session = aiohttp.ClientSession(timeout=timeout)
 
     @on_stop
@@ -116,7 +117,7 @@ class TelemetryDataCollector(AIPerfLifecycleMixin):
                 return False
         else:
             # Create a temporary session for reachability check
-            timeout = aiohttp.ClientTimeout(total=URL_REACHABILITY_TIMEOUT)
+            timeout = aiohttp.ClientTimeout(total=Environment.GPU.REACHABILITY_TIMEOUT)
             async with aiohttp.ClientSession(timeout=timeout) as temp_session:
                 try:
                     # Try HEAD first for efficiency
@@ -152,9 +153,7 @@ class TelemetryDataCollector(AIPerfLifecycleMixin):
         except Exception as e:
             if self._error_callback:
                 try:
-                    res = self._error_callback(ErrorDetails.from_exception(e), self.id)
-                    if inspect.isawaitable(res):
-                        await res
+                    await self._error_callback(ErrorDetails.from_exception(e), self.id)
                 except Exception as callback_error:
                     self.error(f"Failed to send error via callback: {callback_error}")
             else:
@@ -179,9 +178,7 @@ class TelemetryDataCollector(AIPerfLifecycleMixin):
 
             if records and self._record_callback:
                 try:
-                    res = self._record_callback(records, self.id)
-                    if inspect.isawaitable(res):
-                        await res
+                    await self._record_callback(records, self.id)
                 except Exception as e:
                     self.warning(f"Failed to send telemetry records via callback: {e}")
 
@@ -238,7 +235,6 @@ class TelemetryDataCollector(AIPerfLifecycleMixin):
                 Returns empty list if metrics_data is empty or parsing fails.
         """
         if not metrics_data.strip():
-            self.warning("Response from DCGM metrics endpoint is empty")
             return []
 
         current_timestamp = time.time_ns()

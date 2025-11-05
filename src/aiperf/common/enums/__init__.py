@@ -32,6 +32,7 @@ from aiperf.common.enums.dataset_enums import (
     AudioFormat,
     ComposerType,
     CustomDatasetType,
+    DatasetSamplingStrategy,
     ImageFormat,
     PromptSource,
     PublicDatasetType,
@@ -90,10 +91,14 @@ from aiperf.common.enums.service_enums import (
     ServiceType,
 )
 from aiperf.common.enums.sse_enums import (
+    SSEEventType,
     SSEFieldType,
 )
 from aiperf.common.enums.system_enums import (
     SystemState,
+)
+from aiperf.common.enums.telemetry_enums import (
+    GPUTelemetryMode,
 )
 from aiperf.common.enums.timing_enums import (
     CreditPhase,
@@ -123,12 +128,14 @@ __all__ = [
     "CreditPhase",
     "CustomDatasetType",
     "DataExporterType",
+    "DatasetSamplingStrategy",
     "EndpointType",
     "EnergyMetricUnit",
     "EnergyMetricUnitInfo",
     "ExportLevel",
     "FrequencyMetricUnit",
     "FrequencyMetricUnitInfo",
+    "GPUTelemetryMode",
     "GenericMetricUnit",
     "ImageFormat",
     "LifecycleState",
@@ -153,6 +160,7 @@ __all__ = [
     "RecordProcessorType",
     "RequestRateMode",
     "ResultsProcessorType",
+    "SSEEventType",
     "SSEFieldType",
     "ServiceRegistrationStatus",
     "ServiceRunType",

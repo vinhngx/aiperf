@@ -1,14 +1,13 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-import uuid
-
+from aiperf.common import random_generator as rng
 from aiperf.common.config import UserConfig
 from aiperf.common.enums import ComposerType
 from aiperf.common.factories import ComposerFactory
 from aiperf.common.models import Audio, Conversation, Image, Text, Turn, Video
+from aiperf.common.session_id_generator import SessionIDGenerator
 from aiperf.common.tokenizer import Tokenizer
-from aiperf.dataset import utils
 from aiperf.dataset.composer.base import BaseDatasetComposer
 
 
@@ -16,6 +15,10 @@ from aiperf.dataset.composer.base import BaseDatasetComposer
 class SyntheticDatasetComposer(BaseDatasetComposer):
     def __init__(self, config: UserConfig, tokenizer: Tokenizer):
         super().__init__(config, tokenizer)
+        self.session_id_generator = SessionIDGenerator(seed=config.input.random_seed)
+
+        self._turn_sampler_rng = rng.derive("composer.conversation.turn_count")
+        self._delay_sampler_rng = rng.derive("composer.conversation.turn_delay")
 
         if (
             not self.include_prompt
@@ -38,13 +41,10 @@ class SyntheticDatasetComposer(BaseDatasetComposer):
             list[Conversation]: A list of conversation objects.
         """
         conversations = []
-        # TODO: remove after --num-dataset-entries is separated from --num-conversations
-        if self.config.input.conversation.num is None:
-            self.config.input.conversation.num = 100
-        for _ in range(self.config.input.conversation.num):
-            conversation = Conversation(session_id=str(uuid.uuid4()))
+        for _ in range(self.config.input.conversation.num_dataset_entries):
+            conversation = Conversation(session_id=self.session_id_generator.next())
 
-            num_turns = utils.sample_positive_normal_integer(
+            num_turns = self._turn_sampler_rng.sample_positive_normal_integer(
                 self.config.input.conversation.turn.mean,
                 self.config.input.conversation.turn.stddev,
             )
@@ -80,7 +80,7 @@ class SyntheticDatasetComposer(BaseDatasetComposer):
             turn.videos.append(self._generate_video_payloads())
 
         if not is_first:
-            delay = utils.sample_positive_normal_integer(
+            delay = self._delay_sampler_rng.sample_positive_normal_integer(
                 self.config.input.conversation.turn.delay.mean,
                 self.config.input.conversation.turn.delay.stddev,
             )

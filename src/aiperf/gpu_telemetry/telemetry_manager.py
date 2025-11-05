@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
-from urllib.parse import urlparse
 
 from aiperf.common.base_component_service import BaseComponentService
 from aiperf.common.config import ServiceConfig, UserConfig
@@ -12,10 +11,10 @@ from aiperf.common.enums import (
     CommandType,
     ServiceType,
 )
+from aiperf.common.environment import Environment
 from aiperf.common.factories import ServiceFactory
 from aiperf.common.hooks import on_command, on_init, on_stop
 from aiperf.common.messages import (
-    CommandAcknowledgedResponse,
     ProfileCancelCommand,
     ProfileConfigureCommand,
     TelemetryRecordsMessage,
@@ -25,10 +24,6 @@ from aiperf.common.models import ErrorDetails, TelemetryRecord
 from aiperf.common.protocols import (
     PushClientProtocol,
     ServiceProtocol,
-)
-from aiperf.gpu_telemetry.constants import (
-    DEFAULT_COLLECTION_INTERVAL,
-    DEFAULT_DCGM_ENDPOINTS,
 )
 from aiperf.gpu_telemetry.telemetry_data_collector import TelemetryDataCollector
 
@@ -74,41 +69,34 @@ class TelemetryManager(BaseComponentService):
         )
 
         self._collectors: dict[str, TelemetryDataCollector] = {}
+        self._collector_id_to_url: dict[str, str] = {}
 
         self._user_explicitly_configured_telemetry = (
             user_config.gpu_telemetry is not None
         )
 
-        # Normalize to list
-        user_endpoints = (
-            []
-            if user_config.gpu_telemetry is None
-            else [user_config.gpu_telemetry]
-            if isinstance(user_config.gpu_telemetry, str)
-            else list(user_config.gpu_telemetry)
-        )
+        user_endpoints = user_config.gpu_telemetry_urls or []
+        if isinstance(user_endpoints, str):
+            user_endpoints = [user_endpoints]
 
-        # Validate and normalize URLs
-        valid_endpoints = []
-        for endpoint in user_endpoints:
-            try:
-                parsed = urlparse(endpoint)
-                if parsed.scheme in ("http", "https") and parsed.netloc:
-                    valid_endpoints.append(self._normalize_dcgm_url(endpoint))
-            except Exception:
-                continue
+        valid_endpoints = [self._normalize_dcgm_url(url) for url in user_endpoints]
 
         # Store user-provided endpoints separately for display filtering (excluding auto-inserted defaults)
         self._user_provided_endpoints = [
-            ep for ep in valid_endpoints if ep not in DEFAULT_DCGM_ENDPOINTS
+            ep
+            for ep in valid_endpoints
+            if ep not in Environment.GPU.DEFAULT_DCGM_ENDPOINTS
         ]
 
         # Combine defaults + user endpoints, preserving order and removing duplicates
         self._dcgm_endpoints = list(
-            dict.fromkeys(list(DEFAULT_DCGM_ENDPOINTS) + self._user_provided_endpoints)
+            dict.fromkeys(
+                list(Environment.GPU.DEFAULT_DCGM_ENDPOINTS)
+                + self._user_provided_endpoints
+            )
         )
 
-        self._collection_interval = DEFAULT_COLLECTION_INTERVAL
+        self._collection_interval = Environment.GPU.COLLECTION_INTERVAL
 
     @staticmethod
     def _normalize_dcgm_url(url: str) -> str:
@@ -139,17 +127,18 @@ class TelemetryManager(BaseComponentService):
 
         Returns:
             List of endpoint URLs to display in console/export output:
-            - Empty list if user did not configure telemetry (implicit acceptance only)
-            - reachable_defaults if user configured telemetry with no custom endpoints
-            - user_provided_endpoints + reachable_defaults if custom endpoints provided
+            - reachable_defaults if any defaults are reachable
+            - user_provided_endpoints + reachable_defaults if custom endpoints and defaults reachable
+            - user_provided_endpoints if user configured but no defaults reachable
+            - Empty list if no reachable defaults and user did not configure telemetry
         """
-        if not self._user_explicitly_configured_telemetry:
-            return []
-
-        if self._user_provided_endpoints:
+        if reachable_defaults and self._user_provided_endpoints:
             return list(self._user_provided_endpoints) + reachable_defaults
-
-        return reachable_defaults
+        elif reachable_defaults:
+            return reachable_defaults
+        elif self._user_provided_endpoints:
+            return self._user_provided_endpoints
+        return []
 
     @on_init
     async def _initialize(self) -> None:
@@ -176,9 +165,11 @@ class TelemetryManager(BaseComponentService):
         """
 
         self._collectors.clear()
+        self._collector_id_to_url.clear()
         for dcgm_url in self._dcgm_endpoints:
             self.debug(f"GPU Telemetry: Testing reachability of {dcgm_url}")
             collector_id = f"collector_{dcgm_url.replace(':', '_').replace('/', '_')}"
+            self._collector_id_to_url[collector_id] = dcgm_url
             collector = TelemetryDataCollector(
                 dcgm_url=dcgm_url,
                 collection_interval=self._collection_interval,
@@ -202,11 +193,14 @@ class TelemetryManager(BaseComponentService):
         # Determine which defaults are reachable for display filtering
         reachable_endpoints = list(self._collectors.keys())
         reachable_defaults = [
-            ep for ep in DEFAULT_DCGM_ENDPOINTS if ep in reachable_endpoints
+            ep
+            for ep in Environment.GPU.DEFAULT_DCGM_ENDPOINTS
+            if ep in reachable_endpoints
         ]
         endpoints_for_display = self._compute_endpoints_for_display(reachable_defaults)
 
         if not self._collectors:
+            # Telemetry manager shutdown occurs in _on_start_profiling to prevent hang
             await self._send_telemetry_status(
                 enabled=False,
                 reason="no DCGM endpoints reachable",
@@ -232,14 +226,9 @@ class TelemetryManager(BaseComponentService):
         Args:
             message: Profile start command from SystemController
         """
-        await self.publish(
-            CommandAcknowledgedResponse.from_command_message(message, self.service_id)
-        )
-
         if not self._collectors:
-            await self._send_telemetry_disabled_status_and_shutdown(
-                "no DCGM endpoints reachable"
-            )
+            # Telemetry disabled status already sent in _profile_configure_command, only shutdown here
+            self._shutdown_task = asyncio.create_task(self._delayed_shutdown())
             return
 
         started_count = 0
@@ -252,10 +241,14 @@ class TelemetryManager(BaseComponentService):
                 self.error(f"Failed to start collector for {dcgm_url}: {e}")
 
         if started_count == 0:
-            self.warning("No telemetry collectors successfully started")
-            await self._send_telemetry_disabled_status_and_shutdown(
-                "all collectors failed to start"
+            self.warning("No GPU telemetry collectors successfully started")
+            await self._send_telemetry_status(
+                enabled=False,
+                reason="all collectors failed to start",
+                endpoints_configured=self._compute_endpoints_for_display([]),
+                endpoints_reachable=[],
             )
+            self._shutdown_task = asyncio.create_task(self._delayed_shutdown())
             return
 
     @on_command(CommandType.PROFILE_CANCEL)
@@ -285,30 +278,11 @@ class TelemetryManager(BaseComponentService):
     async def _delayed_shutdown(self) -> None:
         """Shutdown service after a delay to allow command response to be sent.
 
-        Waits 5 seconds before calling stop() to ensure the command response
+        Waits before calling stop() to ensure the command response
         has time to be published and transmitted to the SystemController.
         """
-        await asyncio.sleep(5.0)
+        await asyncio.sleep(Environment.GPU.SHUTDOWN_DELAY)
         await self.stop()
-
-    async def _send_telemetry_disabled_status_and_shutdown(self, reason: str) -> None:
-        """Send telemetry disabled status to SystemController and schedule delayed shutdown.
-
-        Sends status message immediately, then schedules service shutdown after a delay
-        to ensure command response is sent before service stops.
-
-        Args:
-            reason: Human-readable reason for disabling telemetry
-        """
-        await self._send_telemetry_status(
-            enabled=False,
-            reason=reason,
-            endpoints_configured=self._compute_endpoints_for_display([]),
-            endpoints_reachable=[],
-        )
-
-        # Schedule delayed shutdown to allow command response to be sent
-        self._shutdown_task = asyncio.create_task(self._delayed_shutdown())
 
     async def _stop_all_collectors(self) -> None:
         """Stop all telemetry collectors.
@@ -347,9 +321,11 @@ class TelemetryManager(BaseComponentService):
             return
 
         try:
+            dcgm_url = self._collector_id_to_url.get(collector_id, "")
             message = TelemetryRecordsMessage(
                 service_id=self.service_id,
                 collector_id=collector_id,
+                dcgm_url=dcgm_url,
                 records=records,
                 error=None,
             )
@@ -371,9 +347,11 @@ class TelemetryManager(BaseComponentService):
         """
 
         try:
+            dcgm_url = self._collector_id_to_url.get(collector_id, "")
             error_message = TelemetryRecordsMessage(
                 service_id=self.service_id,
                 collector_id=collector_id,
+                dcgm_url=dcgm_url,
                 records=[],
                 error=error,
             )

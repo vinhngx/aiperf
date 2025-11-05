@@ -11,6 +11,7 @@ import orjson
 from pydantic import (
     BaseModel,
     Field,
+    RootModel,
     SerializeAsAny,
 )
 from typing_extensions import Self
@@ -19,12 +20,14 @@ from aiperf.common.aiperf_logger import AIPerfLogger
 from aiperf.common.constants import NANOS_PER_SECOND, STAT_KEYS
 from aiperf.common.enums import CreditPhase, SSEFieldType
 from aiperf.common.enums.metric_enums import MetricValueTypeT
+from aiperf.common.exceptions import InvalidInferenceResultError
 from aiperf.common.models.base_models import AIPerfBaseModel
 from aiperf.common.models.dataset_models import Turn
 from aiperf.common.models.error_models import ErrorDetails, ErrorDetailsCount
 from aiperf.common.models.export_models import JsonMetricResult
 from aiperf.common.models.model_endpoint_info import ModelEndpointInfo
-from aiperf.common.types import JsonObject, MetricTagT
+from aiperf.common.models.usage_models import Usage
+from aiperf.common.types import JsonObject, MetricTagT, TimeSliceT
 from aiperf.common.utils import load_json_str
 
 _logger = AIPerfLogger(__name__)
@@ -42,6 +45,10 @@ class MetricResult(JsonMetricResult):
     count: int | None = Field(
         default=None,
         description="The total number of records used to calculate the metric",
+    )
+    current: float | None = Field(
+        default=None,
+        description="The most recent value of the metric (used for realtime dashboard display only)",
     )
 
     def to_display_unit(self) -> "MetricResult":
@@ -129,6 +136,10 @@ class MetricRecordMetadata(AIPerfBaseModel):
 class ProfileResults(AIPerfBaseModel):
     records: list[MetricResult] | None = Field(
         ..., description="The records of the profile results"
+    )
+    timeslice_metric_results: dict[TimeSliceT, list[MetricResult]] | None = Field(
+        default=None,
+        description="The timeslice metric results of the profile (if using timeslice mode)",
     )
     total_expected: int | None = Field(
         default=None,
@@ -470,6 +481,26 @@ class RequestRecord(AIPerfBaseModel):
             and all(0 < response.perf_ns < sys.maxsize for response in self.responses)
         )
 
+    def create_error_from_invalid(self) -> None:
+        """Convert any invalid request records to error records for combined processing."""
+        if not self.valid and not self.has_error:
+            _logger.debug(
+                lambda: f"Converting invalid request record to error record: {self}"
+            )
+            err = InvalidInferenceResultError("Invalid inference result")
+            if len(self.responses) == 0:
+                err.add_note("No responses were received")
+            if self.start_perf_ns <= 0 or self.start_perf_ns >= sys.maxsize:
+                err.add_note(
+                    f"Start perf ns timestamp is invalid: {self.start_perf_ns}"
+                )
+            for i, response in enumerate(self.responses):
+                if response.perf_ns <= 0 or response.perf_ns >= sys.maxsize:
+                    err.add_note(
+                        f"Response {i} perf ns timestamp is invalid: {response.perf_ns}"
+                    )
+            self.error = ErrorDetails.from_exception(err)
+
     @property
     def time_to_first_response_ns(self) -> int | None:
         """Get the time to the first response in nanoseconds."""
@@ -575,16 +606,16 @@ class ReasoningResponseData(BaseResponseData):
         return "".join([self.reasoning or "", self.content or ""])
 
 
+class RAGSources(RootModel[dict[str, Any] | list[Any]]):
+    """RAG sources can be either a dictionary or list format."""
+
+
 class EmbeddingResponseData(BaseResponseData):
     """Parsed embedding response data."""
 
     embeddings: list[list[float]] = Field(
         ..., description="The embedding vectors from the response."
     )
-
-    def get_text(self) -> str:
-        """Get the text of the response (empty for embeddings)."""
-        return ""
 
 
 class RankingsResponseData(BaseResponseData):
@@ -594,22 +625,41 @@ class RankingsResponseData(BaseResponseData):
         ..., description="The rankings results from the response."
     )
 
-    def get_text(self) -> str:
-        """Get the text of the response (empty for rankings)."""
-        return ""
-
 
 class ParsedResponse(AIPerfBaseModel):
     """Parsed response from a inference client."""
 
     perf_ns: int = Field(description="The performance timestamp of the response.")
+    # NOTE: SerializeAsAny is used to allow for generic subclass support at runtime,
+    #       allowing for user-defined response data classes.
     data: SerializeAsAny[
         ReasoningResponseData
         | TextResponseData
         | EmbeddingResponseData
         | RankingsResponseData
         | BaseResponseData
-    ] = Field(..., description="The parsed response data.")
+        | None
+    ] = Field(
+        default=None,
+        description="The parsed response data. This can be any of the response data classes, "
+        "or a user-defined response data class that inherits from BaseResponseData. "
+        "May be None for usage-only responses in streaming mode.",
+    )
+    usage: Usage | None = Field(
+        default=None,
+        description="API-reported usage information. Structure varies by provider. "
+        "Access token counts via properties like: usage.prompt_tokens, usage.completion_tokens, or "
+        "by accessing the usage dictionary directly.",
+    )
+    sources: RAGSources | None = Field(
+        default=None,
+        description="The sources used in the RAG query of the response. This can be a dictionary of source documents, "
+        "a list of sources, or None. Only applicable to responses with RAG response data.",
+    )
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Additional metadata from the response that is useful for analysis (rate limits, content filters, etc.)",
+    )
 
 
 class ParsedResponseRecord(AIPerfBaseModel):
@@ -619,15 +669,15 @@ class ParsedResponseRecord(AIPerfBaseModel):
     responses: list[ParsedResponse] = Field(description="The parsed responses.")
     input_token_count: int | None = Field(
         default=None,
-        description="The number of tokens in the input. If None, the number of tokens could not be calculated.",
+        description="The number of tokens in the input (client-side tokenization). If None, the number of tokens could not be calculated.",
     )
     output_token_count: int | None = Field(
         default=None,
-        description="The number of output tokens across all responses. If None, the number of tokens could not be calculated.",
+        description="The number of output tokens across all responses (client-side tokenization). If None, the number of tokens could not be calculated.",
     )
     reasoning_token_count: int | None = Field(
         default=None,
-        description="The number of reasoning tokens across all responses. If None, the number of tokens could not be calculated, or the model does not support reasoning.",
+        description="The number of reasoning tokens across all responses (client-side tokenization). If None, the number of tokens could not be calculated, or the model does not support reasoning.",
     )
 
     @cached_property
@@ -657,6 +707,15 @@ class ParsedResponseRecord(AIPerfBaseModel):
         )
 
     @cached_property
+    def content_responses(self) -> list[ParsedResponse]:
+        """Get only responses with actual content (data is not None or empty).
+
+        This excludes usage-only or [DONE] responses that may appear at the end of streaming responses.
+        Useful for timing metrics that should measure content delivery.
+        """
+        return [response for response in self.responses if response.data]
+
+    @cached_property
     def request_duration_ns(self) -> int:
         """Get the duration of the request in nanoseconds."""
         return self.end_perf_ns - self.start_perf_ns
@@ -679,7 +738,7 @@ class ParsedResponseRecord(AIPerfBaseModel):
 
         Checks:
         - Request has no errors
-        - Has at least one response
+        - Has at least one content response
         - Start time is before the end time
         - Response timestamps are within valid ranges
 
@@ -688,7 +747,7 @@ class ParsedResponseRecord(AIPerfBaseModel):
         """
         return (
             not self.has_error
-            and len(self.responses) > 0
+            and len(self.content_responses) > 0
             and 0 <= self.start_perf_ns < self.end_perf_ns < sys.maxsize
             and all(0 < response.perf_ns < sys.maxsize for response in self.responses)
         )
