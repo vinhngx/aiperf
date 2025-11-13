@@ -1,3 +1,7 @@
+<!--
+# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+-->
 # AIPerf Utility Notebooks
 
 This folder contains the various utility notebooks for AIPerf.
