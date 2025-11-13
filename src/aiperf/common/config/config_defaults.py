@@ -56,6 +56,8 @@ class InputDefaults:
     DATASET_SAMPLING_STRATEGY = DatasetSamplingStrategy.SHUFFLE
     RANDOM_SEED = None
     NUM_DATASET_ENTRIES = 100
+    RANKINGS_PASSAGES_MEAN = 1
+    RANKINGS_PASSAGES_STDDEV = 0
 
 
 @dataclass(frozen=True)
@@ -87,8 +89,8 @@ class VideoDefaults:
     WIDTH = None
     HEIGHT = None
     SYNTH_TYPE = VideoSynthType.MOVING_SHAPES
-    FORMAT = VideoFormat.MP4
-    CODEC = "libx264"
+    FORMAT = VideoFormat.WEBM
+    CODEC = "libvpx-vp9"
 
 
 @dataclass(frozen=True)
