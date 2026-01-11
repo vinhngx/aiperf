@@ -27,6 +27,7 @@ from aiperf.common.enums.data_exporter_enums import (
     ConsoleExporterType,
     DataExporterType,
     ExportLevel,
+    ServerMetricsFormat,
 )
 from aiperf.common.enums.dataset_enums import (
     AudioFormat,
@@ -56,6 +57,7 @@ from aiperf.common.enums.metric_enums import (
     FrequencyMetricUnit,
     FrequencyMetricUnitInfo,
     GenericMetricUnit,
+    MetricDictValueTypeT,
     MetricFlags,
     MetricOverTimeUnit,
     MetricOverTimeUnitInfo,
@@ -64,9 +66,12 @@ from aiperf.common.enums.metric_enums import (
     MetricTimeUnit,
     MetricTimeUnitInfo,
     MetricType,
+    MetricUnitT,
     MetricValueType,
     MetricValueTypeInfo,
+    MetricValueTypeT,
     MetricValueTypeVarT,
+    PlotMetricDirection,
     PowerMetricUnit,
     PowerMetricUnitInfo,
     TemperatureMetricUnit,
@@ -77,12 +82,16 @@ from aiperf.common.enums.model_enums import (
 )
 from aiperf.common.enums.plugin_enums import (
     AIPerfUIType,
+    ConnectionReuseStrategy,
     EndpointType,
     TransportType,
 )
 from aiperf.common.enums.post_processor_enums import (
     RecordProcessorType,
     ResultsProcessorType,
+)
+from aiperf.common.enums.prometheus_enums import (
+    PrometheusMetricType,
 )
 from aiperf.common.enums.service_enums import (
     LifecycleState,
@@ -124,6 +133,7 @@ __all__ = [
     "CommandType",
     "CommunicationBackend",
     "ComposerType",
+    "ConnectionReuseStrategy",
     "ConsoleExporterType",
     "CreditPhase",
     "CustomDatasetType",
@@ -141,6 +151,7 @@ __all__ = [
     "LifecycleState",
     "MediaType",
     "MessageType",
+    "MetricDictValueTypeT",
     "MetricFlags",
     "MetricOverTimeUnit",
     "MetricOverTimeUnitInfo",
@@ -149,12 +160,16 @@ __all__ = [
     "MetricTimeUnit",
     "MetricTimeUnitInfo",
     "MetricType",
+    "MetricUnitT",
     "MetricValueType",
     "MetricValueTypeInfo",
+    "MetricValueTypeT",
     "MetricValueTypeVarT",
     "ModelSelectionStrategy",
+    "PlotMetricDirection",
     "PowerMetricUnit",
     "PowerMetricUnitInfo",
+    "PrometheusMetricType",
     "PromptSource",
     "PublicDatasetType",
     "RecordProcessorType",
@@ -162,6 +177,7 @@ __all__ = [
     "ResultsProcessorType",
     "SSEEventType",
     "SSEFieldType",
+    "ServerMetricsFormat",
     "ServiceRegistrationStatus",
     "ServiceRunType",
     "ServiceType",

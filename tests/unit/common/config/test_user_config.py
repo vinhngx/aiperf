@@ -12,13 +12,16 @@ from aiperf.common.config import (
     InputConfig,
     LoadGeneratorConfig,
     OutputConfig,
+    RankingsConfig,
+    RankingsPassagesConfig,
+    RankingsQueryConfig,
     TokenizerConfig,
     TurnConfig,
     TurnDelayConfig,
     UserConfig,
 )
 from aiperf.common.enums import EndpointType, GPUTelemetryMode
-from aiperf.common.enums.dataset_enums import CustomDatasetType
+from aiperf.common.enums.dataset_enums import DatasetSamplingStrategy
 from aiperf.common.enums.timing_enums import TimingMode
 
 """
@@ -38,6 +41,12 @@ class TestUserConfig:
                 custom_endpoint="custom_endpoint",
                 streaming=True,
                 url="http://custom-url",
+                api_key="test_api_key",
+                timeout_seconds=10,
+            ),
+            input=InputConfig(
+                random_seed=42,
+                dataset_sampling_strategy=DatasetSamplingStrategy.SHUFFLE,
                 extra=[
                     ("key1", "value1"),
                     ("key2", "value2"),
@@ -47,36 +56,29 @@ class TestUserConfig:
                     ("Authorization", "Bearer token"),
                     ("Content-Type", "application/json"),
                 ],
-                api_key="test_api_key",
-                ssl_options={"verify": False},
-                timeout=10,
-            ),
-            conversation_config=ConversationConfig(
-                num=10,
-                turn=TurnConfig(
-                    mean=10,
-                    stddev=10,
-                    delay=TurnDelayConfig(
+                conversation=ConversationConfig(
+                    num=10,
+                    turn=TurnConfig(
                         mean=10,
                         stddev=10,
+                        delay=TurnDelayConfig(
+                            mean=10,
+                            stddev=10,
+                        ),
                     ),
                 ),
-            ),
-            input=InputConfig(
-                custom_dataset_type=CustomDatasetType.SINGLE_TURN,
             ),
             output=OutputConfig(
                 artifact_directory="test_artifacts",
             ),
             tokenizer=TokenizerConfig(
-                model_name="test_tokenizer",
+                name="test_tokenizer",
+                revision="test_revision",
             ),
             loadgen=LoadGeneratorConfig(
                 concurrency=10,
                 request_rate=10,
             ),
-            verbose=True,
-            template_filename="test_template.yaml",
             cli_command="test_cli_command",
         )
 
@@ -559,3 +561,741 @@ def test_multi_turn_request_count_conflict():
                 request_count=100,
             ),
         )
+
+
+def test_concurrency_exceeds_request_count_single_turn():
+    """Test that concurrency > request_count raises validation error for single-turn."""
+    with pytest.raises(
+        ValueError,
+        match="Concurrency \\(100\\) cannot be greater than the request count \\(50\\)",
+    ):
+        UserConfig(
+            endpoint=EndpointConfig(
+                model_names=["test-model"],
+                type=EndpointType.CHAT,
+                custom_endpoint="test",
+            ),
+            loadgen=LoadGeneratorConfig(
+                concurrency=100,
+                request_count=50,
+            ),
+        )
+
+
+def test_concurrency_equals_request_count_single_turn():
+    """Test that concurrency == request_count is valid for single-turn."""
+    config = UserConfig(
+        endpoint=EndpointConfig(
+            model_names=["test-model"],
+            type=EndpointType.CHAT,
+            custom_endpoint="test",
+        ),
+        loadgen=LoadGeneratorConfig(
+            concurrency=50,
+            request_count=50,
+        ),
+    )
+    assert config.loadgen.concurrency == 50
+    assert config.loadgen.request_count == 50
+
+
+def test_concurrency_less_than_request_count_single_turn():
+    """Test that concurrency < request_count is valid for single-turn."""
+    config = UserConfig(
+        endpoint=EndpointConfig(
+            model_names=["test-model"],
+            type=EndpointType.CHAT,
+            custom_endpoint="test",
+        ),
+        loadgen=LoadGeneratorConfig(
+            concurrency=25,
+            request_count=100,
+        ),
+    )
+    assert config.loadgen.concurrency == 25
+    assert config.loadgen.request_count == 100
+
+
+def test_concurrency_exceeds_conversation_num_multi_turn():
+    """Test that concurrency > conversation_num raises validation error for multi-turn."""
+    with pytest.raises(
+        ValueError,
+        match="Concurrency \\(100\\) cannot be greater than the number of conversations \\(50\\)",
+    ):
+        UserConfig(
+            endpoint=EndpointConfig(
+                model_names=["test-model"],
+                type=EndpointType.CHAT,
+                custom_endpoint="test",
+            ),
+            input=InputConfig(
+                conversation=ConversationConfig(num=50),
+            ),
+            loadgen=LoadGeneratorConfig(
+                concurrency=100,
+            ),
+        )
+
+
+def test_concurrency_equals_conversation_num_multi_turn():
+    """Test that concurrency == conversation_num is valid for multi-turn."""
+    config = UserConfig(
+        endpoint=EndpointConfig(
+            model_names=["test-model"],
+            type=EndpointType.CHAT,
+            custom_endpoint="test",
+        ),
+        input=InputConfig(
+            conversation=ConversationConfig(num=50),
+        ),
+        loadgen=LoadGeneratorConfig(
+            concurrency=50,
+        ),
+    )
+    assert config.loadgen.concurrency == 50
+    assert config.input.conversation.num == 50
+
+
+def test_concurrency_less_than_conversation_num_multi_turn():
+    """Test that concurrency < conversation_num is valid for multi-turn."""
+    config = UserConfig(
+        endpoint=EndpointConfig(
+            model_names=["test-model"],
+            type=EndpointType.CHAT,
+            custom_endpoint="test",
+        ),
+        input=InputConfig(
+            conversation=ConversationConfig(num=100),
+        ),
+        loadgen=LoadGeneratorConfig(
+            concurrency=25,
+        ),
+    )
+    assert config.loadgen.concurrency == 25
+    assert config.input.conversation.num == 100
+
+
+def test_concurrency_none_is_valid():
+    """Test that concurrency=None doesn't trigger validation errors."""
+    config = UserConfig(
+        endpoint=EndpointConfig(
+            model_names=["test-model"],
+            type=EndpointType.CHAT,
+            custom_endpoint="test",
+        ),
+        loadgen=LoadGeneratorConfig(
+            request_count=50,
+        ),
+    )
+    assert config.loadgen.concurrency is None or config.loadgen.concurrency == 1
+
+
+def test_concurrency_validation_with_request_rate():
+    """Test that concurrency validation works when request_rate is also specified."""
+    with pytest.raises(
+        ValueError,
+        match="Concurrency \\(100\\) cannot be greater than the request count \\(50\\)",
+    ):
+        UserConfig(
+            endpoint=EndpointConfig(
+                model_names=["test-model"],
+                type=EndpointType.CHAT,
+                custom_endpoint="test",
+            ),
+            loadgen=LoadGeneratorConfig(
+                concurrency=100,
+                request_count=50,
+                request_rate=10.0,
+            ),
+        )
+
+
+def test_concurrency_validation_skipped_when_request_count_not_set():
+    """Test that concurrency validation is skipped when request_count is not explicitly set."""
+    config = UserConfig(
+        endpoint=EndpointConfig(
+            model_names=["test-model"],
+            type=EndpointType.CHAT,
+            custom_endpoint="test",
+        ),
+        loadgen=LoadGeneratorConfig(
+            concurrency=100,
+            request_rate=10.0,
+        ),
+    )
+    assert config.loadgen.concurrency == 100
+
+
+def test_concurrency_validation_applies_when_request_count_set():
+    """Test that concurrency validation applies when request_count is explicitly set."""
+    with pytest.raises(
+        ValueError,
+        match="Concurrency \\(100\\) cannot be greater than the request count \\(50\\)",
+    ):
+        UserConfig(
+            endpoint=EndpointConfig(
+                model_names=["test-model"],
+                type=EndpointType.CHAT,
+                custom_endpoint="test",
+            ),
+            loadgen=LoadGeneratorConfig(
+                concurrency=100,
+                request_count=50,
+            ),
+        )
+
+
+def test_concurrency_validation_with_duration_benchmarking():
+    """Test that concurrency validation is skipped with duration-based benchmarking."""
+    config = UserConfig(
+        endpoint=EndpointConfig(
+            model_names=["test-model"],
+            type=EndpointType.CHAT,
+            custom_endpoint="test",
+        ),
+        loadgen=LoadGeneratorConfig(
+            concurrency=100,
+            benchmark_duration=60,
+        ),
+    )
+    assert config.loadgen.concurrency == 100
+    assert config.loadgen.benchmark_duration == 60
+
+
+# =============================================================================
+# Rankings Configuration Tests
+# =============================================================================
+
+
+def test_rankings_passages_defaults_and_custom_values():
+    """Test rankings passages mean and stddev defaults and custom values."""
+    # Test defaults
+    cfg_default = UserConfig(
+        endpoint=EndpointConfig(
+            model_names=["test-model"],
+            type=EndpointType.HF_TEI_RANKINGS,
+            custom_endpoint="test",
+        ),
+    )
+    assert cfg_default.input.rankings.passages.mean == 1
+    assert cfg_default.input.rankings.passages.stddev == 0
+
+    # Test custom values
+    cfg_custom = UserConfig(
+        endpoint=EndpointConfig(
+            model_names=["test-model"],
+            type=EndpointType.HF_TEI_RANKINGS,
+            custom_endpoint="test",
+        ),
+        input=InputConfig(
+            rankings=RankingsConfig(passages=RankingsPassagesConfig(mean=5, stddev=2))
+        ),
+    )
+    assert cfg_custom.input.rankings.passages.mean == 5
+    assert cfg_custom.input.rankings.passages.stddev == 2
+
+
+def test_rankings_passages_validation_errors():
+    """Test that invalid rankings passages values raise validation errors."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        UserConfig(
+            endpoint=EndpointConfig(
+                model_names=["test-model"],
+                type=EndpointType.HF_TEI_RANKINGS,
+                custom_endpoint="test",
+            ),
+            input=InputConfig(
+                rankings=RankingsConfig(passages=RankingsPassagesConfig(mean=0))
+            ),
+        )
+
+    with pytest.raises(ValidationError):
+        UserConfig(
+            endpoint=EndpointConfig(
+                model_names=["test-model"],
+                type=EndpointType.HF_TEI_RANKINGS,
+                custom_endpoint="test",
+            ),
+            input=InputConfig(
+                rankings=RankingsConfig(passages=RankingsPassagesConfig(stddev=-1))
+            ),
+        )
+
+
+def test_rankings_passages_prompt_token_defaults_and_custom_values():
+    """Test rankings passages prompt token defaults and custom values."""
+    # Test defaults
+    cfg_default = UserConfig(
+        endpoint=EndpointConfig(
+            model_names=["test-model"],
+            type=EndpointType.HF_TEI_RANKINGS,
+            custom_endpoint="test",
+        ),
+    )
+    assert cfg_default.input.rankings.passages.prompt_token_mean == 550
+    assert cfg_default.input.rankings.passages.prompt_token_stddev == 0
+
+    # Test custom values
+    cfg_custom = UserConfig(
+        endpoint=EndpointConfig(
+            model_names=["test-model"],
+            type=EndpointType.HF_TEI_RANKINGS,
+            custom_endpoint="test",
+        ),
+        input=InputConfig(
+            rankings=RankingsConfig(
+                passages=RankingsPassagesConfig(
+                    prompt_token_mean=100, prompt_token_stddev=10
+                )
+            )
+        ),
+    )
+    assert cfg_custom.input.rankings.passages.prompt_token_mean == 100
+    assert cfg_custom.input.rankings.passages.prompt_token_stddev == 10
+
+
+def test_rankings_query_prompt_token_defaults_and_custom_values():
+    """Test rankings query prompt token defaults and custom values."""
+    # Test defaults
+    cfg_default = UserConfig(
+        endpoint=EndpointConfig(
+            model_names=["test-model"],
+            type=EndpointType.HF_TEI_RANKINGS,
+            custom_endpoint="test",
+        ),
+    )
+    assert cfg_default.input.rankings.query.prompt_token_mean == 550
+    assert cfg_default.input.rankings.query.prompt_token_stddev == 0
+
+    # Test custom values
+    cfg_custom = UserConfig(
+        endpoint=EndpointConfig(
+            model_names=["test-model"],
+            type=EndpointType.HF_TEI_RANKINGS,
+            custom_endpoint="test",
+        ),
+        input=InputConfig(
+            rankings=RankingsConfig(
+                query=RankingsQueryConfig(prompt_token_mean=50, prompt_token_stddev=5)
+            )
+        ),
+    )
+    assert cfg_custom.input.rankings.query.prompt_token_mean == 50
+    assert cfg_custom.input.rankings.query.prompt_token_stddev == 5
+
+
+@pytest.mark.parametrize(
+    "config_class,param_name,invalid_value",
+    [
+        (RankingsPassagesConfig, "prompt_token_mean", 0),
+        (RankingsPassagesConfig, "prompt_token_stddev", -1),
+        (RankingsQueryConfig, "prompt_token_mean", 0),
+        (RankingsQueryConfig, "prompt_token_stddev", -1),
+    ],
+)
+def test_rankings_prompt_token_validation_errors(
+    config_class, param_name, invalid_value
+):
+    """Test that invalid rankings prompt token values raise validation errors."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        if config_class == RankingsPassagesConfig:
+            rankings_config = RankingsConfig(
+                passages=RankingsPassagesConfig(**{param_name: invalid_value})
+            )
+        else:
+            rankings_config = RankingsConfig(
+                query=RankingsQueryConfig(**{param_name: invalid_value})
+            )
+        UserConfig(
+            endpoint=EndpointConfig(
+                model_names=["test-model"],
+                type=EndpointType.HF_TEI_RANKINGS,
+                custom_endpoint="test",
+            ),
+            input=InputConfig(rankings=rankings_config),
+        )
+
+
+def test_rankings_and_prompt_tokens_cannot_be_set_together():
+    """Test that prompt input tokens and rankings-specific token options cannot both be set."""
+    from pydantic import ValidationError
+
+    from aiperf.common.config import PromptConfig
+    from aiperf.common.config.prompt_config import InputTokensConfig
+
+    # Create a prompt config with non-default input tokens
+    prompt_config = PromptConfig(input_tokens=InputTokensConfig(mean=100))
+
+    # Setting both prompt input tokens and rankings-specific tokens should raise error
+    with pytest.raises(ValidationError, match="cannot be used together"):
+        UserConfig(
+            endpoint=EndpointConfig(
+                model_names=["test-model"],
+                type=EndpointType.HF_TEI_RANKINGS,
+                custom_endpoint="test",
+            ),
+            input=InputConfig(
+                prompt=prompt_config,
+                rankings=RankingsConfig(
+                    passages=RankingsPassagesConfig(prompt_token_mean=200)
+                ),
+            ),
+        )
+
+    # Setting prompt stddev and rankings token options should also raise error
+    prompt_config_stddev = PromptConfig(input_tokens=InputTokensConfig(stddev=10))
+
+    with pytest.raises(ValidationError, match="cannot be used together"):
+        UserConfig(
+            endpoint=EndpointConfig(
+                model_names=["test-model"],
+                type=EndpointType.HF_TEI_RANKINGS,
+                custom_endpoint="test",
+            ),
+            input=InputConfig(
+                prompt=prompt_config_stddev,
+                rankings=RankingsConfig(
+                    query=RankingsQueryConfig(prompt_token_mean=300)
+                ),
+            ),
+        )
+
+
+def test_rankings_tokens_only_is_allowed():
+    """Test that setting only rankings-specific token options is allowed with rankings endpoint."""
+    cfg = UserConfig(
+        endpoint=EndpointConfig(
+            model_names=["test-model"],
+            type=EndpointType.HF_TEI_RANKINGS,
+            custom_endpoint="test",
+        ),
+        input=InputConfig(
+            rankings=RankingsConfig(
+                passages=RankingsPassagesConfig(
+                    prompt_token_mean=100, prompt_token_stddev=10
+                ),
+                query=RankingsQueryConfig(prompt_token_mean=50, prompt_token_stddev=5),
+            )
+        ),
+    )
+    assert cfg.input.rankings.passages.prompt_token_mean == 100
+    assert cfg.input.rankings.passages.prompt_token_stddev == 10
+    assert cfg.input.rankings.query.prompt_token_mean == 50
+    assert cfg.input.rankings.query.prompt_token_stddev == 5
+
+
+def test_prompt_tokens_only_is_allowed():
+    """Test that setting only prompt input tokens is allowed (no rankings options changed)."""
+    from aiperf.common.config import PromptConfig
+    from aiperf.common.config.prompt_config import InputTokensConfig
+
+    prompt_config = PromptConfig(input_tokens=InputTokensConfig(mean=100))
+
+    cfg = UserConfig(
+        endpoint=EndpointConfig(
+            model_names=["test-model"],
+            type=EndpointType.CHAT,
+            custom_endpoint="test",
+        ),
+        input=InputConfig(prompt=prompt_config),
+    )
+    assert cfg.input.prompt.input_tokens.mean == 100
+
+
+@pytest.mark.parametrize(
+    "rankings_config",
+    [
+        RankingsConfig(passages=RankingsPassagesConfig(mean=5)),
+        RankingsConfig(passages=RankingsPassagesConfig(stddev=2)),
+        RankingsConfig(passages=RankingsPassagesConfig(prompt_token_mean=100)),
+        RankingsConfig(passages=RankingsPassagesConfig(prompt_token_stddev=10)),
+        RankingsConfig(query=RankingsQueryConfig(prompt_token_mean=50)),
+        RankingsConfig(query=RankingsQueryConfig(prompt_token_stddev=5)),
+    ],
+)
+def test_rankings_options_require_rankings_endpoint(rankings_config):
+    """Test that rankings options cannot be used with non-rankings endpoints."""
+    from pydantic import ValidationError
+
+    with pytest.raises(
+        ValidationError, match="can only be used with rankings endpoint types"
+    ):
+        UserConfig(
+            endpoint=EndpointConfig(
+                model_names=["test-model"],
+                type=EndpointType.CHAT,  # Non-rankings endpoint
+                custom_endpoint="test",
+            ),
+            input=InputConfig(rankings=rankings_config),
+        )
+
+
+@pytest.mark.parametrize(
+    "endpoint_type",
+    [
+        EndpointType.COMPLETIONS,
+        EndpointType.EMBEDDINGS,
+        EndpointType.CHAT,
+    ],
+)
+def test_rankings_options_rejected_for_non_rankings_endpoints(endpoint_type):
+    """Test that rankings options are rejected for various non-rankings endpoint types."""
+    from pydantic import ValidationError
+
+    with pytest.raises(
+        ValidationError, match="can only be used with rankings endpoint types"
+    ):
+        UserConfig(
+            endpoint=EndpointConfig(
+                model_names=["test-model"],
+                type=endpoint_type,
+                custom_endpoint="test",
+            ),
+            input=InputConfig(
+                rankings=RankingsConfig(
+                    passages=RankingsPassagesConfig(mean=5, prompt_token_mean=100)
+                )
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    "endpoint_type",
+    [
+        EndpointType.COHERE_RANKINGS,
+        EndpointType.HF_TEI_RANKINGS,
+        EndpointType.NIM_RANKINGS,
+    ],
+)
+def test_rankings_options_allowed_for_rankings_endpoints(endpoint_type):
+    """Test that rankings options are allowed with rankings endpoint types."""
+    cfg = UserConfig(
+        endpoint=EndpointConfig(
+            model_names=["test-model"],
+            type=endpoint_type,
+            custom_endpoint="test",
+        ),
+        input=InputConfig(
+            rankings=RankingsConfig(
+                passages=RankingsPassagesConfig(
+                    mean=5, stddev=2, prompt_token_mean=100, prompt_token_stddev=10
+                ),
+                query=RankingsQueryConfig(prompt_token_mean=50, prompt_token_stddev=5),
+            )
+        ),
+    )
+    assert cfg.input.rankings.passages.mean == 5
+    assert cfg.input.rankings.passages.stddev == 2
+    assert cfg.input.rankings.passages.prompt_token_mean == 100
+    assert cfg.input.rankings.passages.prompt_token_stddev == 10
+    assert cfg.input.rankings.query.prompt_token_mean == 50
+    assert cfg.input.rankings.query.prompt_token_stddev == 5
+
+
+# ==============================================================================
+# Context Prompt Validation Tests
+# ==============================================================================
+
+
+def test_user_context_prompt_requires_num_sessions():
+    """Test that user_context_prompt_length requires num_sessions to be specified."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError) as exc_info:
+        UserConfig(
+            endpoint=EndpointConfig(
+                url="http://localhost:8000/v1/chat/completions",
+                model_names=["gpt-4"],
+            ),
+            input=InputConfig(
+                prompt={
+                    "prefix_prompt": {
+                        "user_context_prompt_length": 100,
+                    }
+                },
+                # conversation.num is not specified - should fail
+            ),
+        )
+
+    error = exc_info.value.errors()[0]
+    assert "user-context-prompt-length" in error["msg"]
+    assert "num-sessions" in error["msg"]
+
+
+def test_user_context_prompt_with_num_sessions_succeeds():
+    """Test that user_context_prompt_length works when num_sessions is specified."""
+    config = UserConfig(
+        endpoint=EndpointConfig(
+            url="http://localhost:8000/v1/chat/completions",
+            model_names=["gpt-4"],
+        ),
+        input=InputConfig(
+            prompt={
+                "prefix_prompt": {
+                    "user_context_prompt_length": 100,
+                }
+            },
+            conversation=ConversationConfig(
+                num=5,
+            ),
+        ),
+    )
+
+    assert config.input.prompt.prefix_prompt.user_context_prompt_length == 100
+    assert config.input.conversation.num == 5
+
+
+def test_shared_system_prompt_without_num_sessions_succeeds():
+    """Test that shared_system_prompt_length works without num_sessions."""
+    config = UserConfig(
+        endpoint=EndpointConfig(
+            url="http://localhost:8000/v1/chat/completions",
+            model_names=["gpt-4"],
+        ),
+        input=InputConfig(
+            prompt={
+                "prefix_prompt": {
+                    "shared_system_prompt_length": 100,
+                }
+            },
+            # No conversation.num specified - should still work for shared prompt
+        ),
+    )
+
+    assert config.input.prompt.prefix_prompt.shared_system_prompt_length == 100
+
+
+def test_mutually_exclusive_prompt_options_shared_and_legacy():
+    """Test that shared_system_prompt_length and prefix_prompt_length are mutually exclusive."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError) as exc_info:
+        UserConfig(
+            endpoint=EndpointConfig(
+                url="http://localhost:8000/v1/chat/completions",
+                model_names=["gpt-4"],
+            ),
+            input=InputConfig(
+                prompt={
+                    "prefix_prompt": {
+                        "shared_system_prompt_length": 100,
+                        "length": 50,  # Legacy prefix prompt length
+                    }
+                }
+            ),
+        )
+
+    error = exc_info.value.errors()[0]
+    assert "mutually exclusive" in error["msg"]
+    assert "shared-system-prompt-length" in error["msg"]
+    assert "prefix-prompt-length" in error["msg"]
+
+
+def test_mutually_exclusive_prompt_options_user_context_and_legacy():
+    """Test that user_context_prompt_length and prefix_prompt_length are mutually exclusive."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError) as exc_info:
+        UserConfig(
+            endpoint=EndpointConfig(
+                url="http://localhost:8000/v1/chat/completions",
+                model_names=["gpt-4"],
+            ),
+            input=InputConfig(
+                prompt={
+                    "prefix_prompt": {
+                        "user_context_prompt_length": 100,
+                        "length": 50,  # Legacy prefix prompt length
+                    }
+                },
+                conversation=ConversationConfig(
+                    num=5,
+                ),
+            ),
+        )
+
+    error = exc_info.value.errors()[0]
+    assert "mutually exclusive" in error["msg"]
+    assert "user-context-prompt-length" in error["msg"]
+    assert "prefix-prompt-length" in error["msg"]
+
+
+def test_mutually_exclusive_prompt_options_both_context_and_legacy():
+    """Test that both context prompts and legacy options are mutually exclusive."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError) as exc_info:
+        UserConfig(
+            endpoint=EndpointConfig(
+                url="http://localhost:8000/v1/chat/completions",
+                model_names=["gpt-4"],
+            ),
+            input=InputConfig(
+                prompt={
+                    "prefix_prompt": {
+                        "shared_system_prompt_length": 100,
+                        "user_context_prompt_length": 50,
+                        "pool_size": 10,  # Legacy option
+                    }
+                },
+                conversation=ConversationConfig(
+                    num=5,
+                ),
+            ),
+        )
+
+    error = exc_info.value.errors()[0]
+    assert "mutually exclusive" in error["msg"]
+
+
+def test_context_prompts_only_succeed():
+    """Test that using only context prompts (no legacy options) works."""
+    config = UserConfig(
+        endpoint=EndpointConfig(
+            url="http://localhost:8000/v1/chat/completions",
+            model_names=["gpt-4"],
+        ),
+        input=InputConfig(
+            prompt={
+                "prefix_prompt": {
+                    "shared_system_prompt_length": 100,
+                    "user_context_prompt_length": 50,
+                }
+            },
+            conversation=ConversationConfig(
+                num=5,
+            ),
+        ),
+    )
+
+    assert config.input.prompt.prefix_prompt.shared_system_prompt_length == 100
+    assert config.input.prompt.prefix_prompt.user_context_prompt_length == 50
+    assert config.input.prompt.prefix_prompt.length == 0
+    assert config.input.prompt.prefix_prompt.pool_size == 0
+
+
+def test_legacy_prompts_only_succeed():
+    """Test that using only legacy options (no context prompts) works."""
+    config = UserConfig(
+        endpoint=EndpointConfig(
+            url="http://localhost:8000/v1/chat/completions",
+            model_names=["gpt-4"],
+        ),
+        input=InputConfig(
+            prompt={
+                "prefix_prompt": {
+                    "length": 50,
+                    "pool_size": 10,
+                }
+            }
+        ),
+    )
+
+    assert config.input.prompt.prefix_prompt.length == 50
+    assert config.input.prompt.prefix_prompt.pool_size == 10
+    assert config.input.prompt.prefix_prompt.shared_system_prompt_length is None
+    assert config.input.prompt.prefix_prompt.user_context_prompt_length is None

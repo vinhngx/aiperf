@@ -6,6 +6,7 @@ from typing import Any
 
 import aiohttp
 
+from aiperf.common.constants import NANOS_PER_SECOND
 from aiperf.common.exceptions import SSEResponseError
 from aiperf.common.mixins import AIPerfLoggerMixin
 from aiperf.common.models import (
@@ -47,6 +48,9 @@ class AioHttpClient(AIPerfLoggerMixin):
         url: str,
         headers: dict[str, str],
         data: str | None = None,
+        *,
+        connector: aiohttp.TCPConnector | None = None,
+        connector_owner: bool = False,
         **kwargs: Any,
     ) -> RequestRecord:
         """Generic request method that handles common logic for all HTTP methods.
@@ -56,6 +60,8 @@ class AioHttpClient(AIPerfLoggerMixin):
             url: The URL to send the request to
             headers: Request headers
             data: Request payload (for POST, PUT, etc.)
+            connector: TCP connector to use for the request
+            connector_owner: Whether the connector is owned by the client
             **kwargs: Additional arguments to pass to the request
 
         Returns:
@@ -70,7 +76,7 @@ class AioHttpClient(AIPerfLoggerMixin):
         try:
             # Make raw HTTP request with precise timing using aiohttp
             async with aiohttp.ClientSession(
-                connector=self.tcp_connector,
+                connector=connector or self.tcp_connector,
                 timeout=self.timeout,
                 headers=headers,
                 skip_auto_headers=[
@@ -78,7 +84,7 @@ class AioHttpClient(AIPerfLoggerMixin):
                     "User-Agent",
                     "Accept-Encoding",
                 ],
-                connector_owner=False,
+                connector_owner=connector_owner,
             ) as session:
                 record.start_perf_ns = time.perf_counter_ns()
                 async with session.request(
@@ -116,6 +122,9 @@ class AioHttpClient(AIPerfLoggerMixin):
                             )
                         )
                     record.end_perf_ns = time.perf_counter_ns()
+                    self.debug(
+                        lambda: f"{method} request to {url} completed in {(record.end_perf_ns - record.start_perf_ns) / NANOS_PER_SECOND} seconds"
+                    )
         except SSEResponseError as e:
             record.end_perf_ns = time.perf_counter_ns()
             self.error(f"Error in SSE response: {e!r}")
@@ -132,6 +141,9 @@ class AioHttpClient(AIPerfLoggerMixin):
         url: str,
         payload: str,
         headers: dict[str, str],
+        *,
+        connector: aiohttp.TCPConnector | None = None,
+        connector_owner: bool = False,
         **kwargs: Any,
     ) -> RequestRecord:
         """Send a streaming or non-streaming POST request to the specified URL with the given payload and headers.
@@ -139,7 +151,15 @@ class AioHttpClient(AIPerfLoggerMixin):
         If the response is an SSE stream, the response will be parsed into a list of SSE messages.
         Otherwise, the response will be parsed into a TextResponse object.
         """
-        return await self._request("POST", url, headers, data=payload, **kwargs)
+        return await self._request(
+            "POST",
+            url,
+            headers,
+            data=payload,
+            connector=connector,
+            connector_owner=connector_owner,
+            **kwargs,
+        )
 
     async def get_request(
         self, url: str, headers: dict[str, str], **kwargs: Any

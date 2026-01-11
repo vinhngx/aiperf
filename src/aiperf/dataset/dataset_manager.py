@@ -180,6 +180,11 @@ class DatasetManager(ReplyClientMixin, BaseComponentService):
     async def _load_public_dataset(self) -> list[Conversation]:
         loader = ShareGPTLoader(self.user_config, self.tokenizer)
         dataset = await loader.load_dataset()
+        # Only use loader's recommended strategy if user hasn't explicitly set one
+        if "dataset_sampling_strategy" not in self.user_config.input.model_fields_set:
+            self.user_config.input.dataset_sampling_strategy = (
+                loader.get_recommended_sampling_strategy()
+            )
         return await loader.convert_to_conversations(dataset)
 
     def _load_custom_dataset(self) -> list[Conversation]:
@@ -216,7 +221,13 @@ class DatasetManager(ReplyClientMixin, BaseComponentService):
 
         if self.user_config.input.public_dataset is not None:
             conversations = await self._load_public_dataset()
-        elif self.user_config.input.custom_dataset_type is not None:
+        elif (
+            self.user_config.input.custom_dataset_type is not None
+            or self.user_config.input.file is not None
+        ):
+            # Use CUSTOM composer if either:
+            # 1. custom_dataset_type is explicitly set, OR
+            # 2. input file is provided (composer will auto-infer type)
             conversations = self._load_custom_dataset()
         else:
             conversations = self._load_synthetic_dataset()
@@ -347,8 +358,10 @@ class DatasetManager(ReplyClientMixin, BaseComponentService):
 
         timing_dataset = []
         for conversation_id, conversation in self.dataset.items():
-            for turn in conversation.turns:
-                timing_dataset.append((turn.timestamp, conversation_id))
+            if conversation.turns:
+                timing_dataset.append(
+                    (conversation.turns[0].timestamp, conversation_id)
+                )
 
         return DatasetTimingResponse(
             service_id=self.service_id,

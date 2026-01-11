@@ -9,12 +9,14 @@ from aiperf.common.enums import CommClientType, LifecycleState
 from aiperf.common.environment import Environment
 from aiperf.common.hooks import Hook, HookType
 from aiperf.common.models import (
+    Conversation,
     MetricRecordMetadata,
     ParsedResponse,
     ParsedResponseRecord,
     RequestInfo,
     RequestRecord,
     ServiceRunInfo,
+    TelemetryExportData,
     TelemetryRecord,
 )
 from aiperf.common.types import (
@@ -31,14 +33,23 @@ from aiperf.common.types import (
 
 if TYPE_CHECKING:
     import multiprocessing
+    from pathlib import Path
 
     from rich.console import Console
 
     from aiperf.common.config import ServiceConfig, UserConfig
+    from aiperf.common.enums import DatasetSamplingStrategy
     from aiperf.common.messages.inference_messages import MetricRecordsData
     from aiperf.common.models.metadata import EndpointMetadata, TransportMetadata
     from aiperf.common.models.model_endpoint_info import ModelEndpointInfo
     from aiperf.common.models.record_models import MetricResult
+    from aiperf.common.models.server_metrics_models import (
+        ErrorDetailsCount,
+        ServerMetricsRecord,
+        ServerMetricsResults,
+        TimeRangeFilter,
+    )
+    from aiperf.dataset.loader.models import CustomDatasetT
     from aiperf.exporters.exporter_config import ExporterConfig, FileExportInfo
     from aiperf.metrics.metric_dicts import MetricRecordDict
     from aiperf.timing.config import TimingManagerConfig
@@ -178,6 +189,59 @@ class RequestClientProtocol(CommunicationClientProtocol, Protocol):
 
 
 @runtime_checkable
+class StreamingRouterClientProtocol(CommunicationClientProtocol, Protocol):
+    """Protocol for ROUTER socket client with bidirectional streaming."""
+
+    def register_receiver(
+        self,
+        handler: Callable[[str, MessageT], Coroutine[Any, Any, None]],
+    ) -> None:
+        """
+        Register handler for incoming messages from DEALER clients.
+
+        Args:
+            handler: Async function that takes (identity: str, message: Message)
+        """
+        ...
+
+    async def send_to(self, identity: str, message: MessageT) -> None:
+        """
+        Send message to specific DEALER client by identity.
+
+        Args:
+            identity: The DEALER client's identity (routing key)
+            message: The message to send
+        """
+        ...
+
+
+@runtime_checkable
+class StreamingDealerClientProtocol(CommunicationClientProtocol, Protocol):
+    """Protocol for DEALER socket client with bidirectional streaming."""
+
+    def register_receiver(
+        self,
+        handler: Callable[[MessageT], Coroutine[Any, Any, None]],
+    ) -> None:
+        """
+        Register handler for incoming messages from ROUTER.
+
+        Args:
+            handler: Async function that takes (message: Message)
+        """
+        ...
+
+    async def send(self, message: MessageT) -> None:
+        """
+        Send message to ROUTER.
+
+        Args:
+            message: The message to send
+        """
+        ...
+
+
+@runtime_checkable
 class SubClientProtocol(CommunicationClientProtocol, Protocol):
     async def subscribe(
         self,
@@ -213,6 +277,7 @@ class CommunicationProtocol(AIPerfLifecycleProtocol, Protocol):
         bind: bool = False,
         socket_ops: dict | None = None,
         max_pull_concurrency: int | None = None,
+        **kwargs: Any,
     ) -> CommunicationClientProtocol:
         """Create a client for the given client type and address, which will be automatically
         started and stopped with the CommunicationProtocol instance."""
@@ -279,6 +344,27 @@ class CommunicationProtocol(AIPerfLifecycleProtocol, Protocol):
         started and stopped with the CommunicationProtocol instance."""
         ...
 
+    def create_streaming_router_client(
+        self,
+        address: CommAddressType,
+        bind: bool = True,
+        socket_ops: dict | None = None,
+    ) -> StreamingRouterClientProtocol:
+        """Create a STREAMING_ROUTER client for the given address, which will be automatically
+        started and stopped with the CommunicationProtocol instance."""
+        ...
+
+    def create_streaming_dealer_client(
+        self,
+        address: CommAddressType,
+        identity: str,
+        bind: bool = False,
+        socket_ops: dict | None = None,
+    ) -> StreamingDealerClientProtocol:
+        """Create a STREAMING_DEALER client for the given address and identity, which will be automatically
+        started and stopped with the CommunicationProtocol instance."""
+        ...
+
 
 @runtime_checkable
 class MessageBusClientProtocol(PubClientProtocol, SubClientProtocol, Protocol):
@@ -314,6 +400,42 @@ class ConsoleExporterProtocol(Protocol):
     def __init__(self, exporter_config: "ExporterConfig") -> None: ...
 
     async def export(self, console: "Console") -> None: ...
+
+
+@runtime_checkable
+class CustomDatasetLoaderProtocol(Protocol):
+    """Protocol for custom dataset loaders that load dataset from a file and convert it to a list of Conversation objects."""
+
+    @classmethod
+    def can_load(
+        cls, data: dict[str, Any] | None = None, filename: "str | Path | None" = None
+    ) -> bool:
+        """Check if this loader can handle the given data format.
+
+        Args:
+            data: Optional dictionary representing a single line from the JSONL file.
+                  None indicates path-based detection only (e.g., for directories).
+            filename: Optional path to the input file/directory for path-based detection
+
+        Returns:
+            True if this loader can handle the data format, False otherwise
+        """
+        ...
+
+    @classmethod
+    def get_preferred_sampling_strategy(cls) -> "DatasetSamplingStrategy":
+        """Get the preferred dataset sampling strategy for this loader.
+
+        Returns:
+            DatasetSamplingStrategy: The preferred sampling strategy
+        """
+        ...
+
+    def load_dataset(self) -> dict[str, list["CustomDatasetT"]]: ...
+
+    def convert_to_conversations(
+        self, custom_data: dict[str, list["CustomDatasetT"]]
+    ) -> list[Conversation]: ...
 
 
 @runtime_checkable
@@ -503,10 +625,62 @@ class ResultsProcessorProtocol(AIPerfLifecycleProtocol, Protocol):
 
 
 @runtime_checkable
-class TelemetryResultsProcessorProtocol(Protocol):
-    """Protocol for telemetry results processors that handle TelemetryRecord objects.
+class ServerMetricsProcessorProtocol(Protocol):
+    """Protocol for server metrics results processors that handle ServerMetricsRecord objects.
 
-    This protocol is separate from ResultsProcessorProtocol because telemetry data
+    This protocol is separate from ResultsProcessorProtocol because server metrics data
+    has fundamentally different structure (hierarchical Prometheus snapshots) compared
+    to inference metrics (flat key-value pairs).
+    """
+
+    async def process_server_metrics_record(
+        self, record: "ServerMetricsRecord"
+    ) -> None:
+        """Process individual server metrics record with complete Prometheus snapshot.
+
+        Args:
+            record: ServerMetricsRecord containing Prometheus metrics snapshot and metadata
+        """
+        ...
+
+    async def summarize(self) -> list["MetricResult"]: ...
+
+
+@runtime_checkable
+class ServerMetricsAccumulatorProtocol(ServerMetricsProcessorProtocol, Protocol):
+    """Protocol for server metrics accumulators that accumulate server metrics data and export aggregated results.
+
+    Extends ServerMetricsProcessorProtocol to provide result export functionality with time filtering
+    and error summary support. Implementations should accumulate Prometheus snapshot data and compute
+    aggregated statistics (mean, p50, p90, p95, p99) for configured metrics across collection windows.
+    """
+
+    async def export_results(
+        self,
+        start_ns: int,
+        end_ns: int,
+        time_filter: "TimeRangeFilter | None" = None,
+        error_summary: list["ErrorDetailsCount"] | None = None,
+    ) -> "ServerMetricsResults | None":
+        """Export accumulated server metrics as results.
+
+        Args:
+            start_ns: Start time of collection in nanoseconds
+            end_ns: End time of collection in nanoseconds
+            time_filter: Optional time filter for aggregation (excludes warmup/buffer)
+            error_summary: Optional list of error counts
+
+        Returns:
+            ServerMetricsResults if data was collected, None otherwise
+        """
+        ...
+
+
+@runtime_checkable
+class GPUTelemetryProcessorProtocol(Protocol):
+    """Protocol for GPU telemetry results processors that handle TelemetryRecord objects.
+
+    This protocol is separate from ResultsProcessorProtocol because GPU telemetry data
     has fundamentally different structure (hierarchical with metadata) compared
     to inference metrics (flat key-value pairs).
     """
@@ -518,6 +692,42 @@ class TelemetryResultsProcessorProtocol(Protocol):
             record: TelemetryRecord containing GPU metrics and hierarchical metadata
         """
         ...
+
+
+@runtime_checkable
+class GPUTelemetryAccumulatorProtocol(GPUTelemetryProcessorProtocol, Protocol):
+    """Protocol for GPU telemetry accumulators that accumulate GPU telemetry data and export pre-computed metrics.
+
+    Extends GPUTelemetryProcessorProtocol to provide result export, realtime telemetry, and summarization
+    capabilities. Implementations should accumulate DCGM metrics, compute aggregated statistics per GPU,
+    and support dynamic dashboard enablement for realtime monitoring.
+    """
+
+    def export_results(
+        self,
+        start_ns: int,
+        end_ns: int,
+        error_summary: list["ErrorDetailsCount"] | None = None,
+    ) -> "TelemetryExportData | None":
+        """Export accumulated telemetry data as a TelemetryExportData object.
+
+        Args:
+            start_ns: Start time of collection in nanoseconds
+            end_ns: End time of collection in nanoseconds
+            error_summary: Optional list of error counts
+
+        Returns:
+            TelemetryExportData object with pre-computed metrics for each GPU
+        """
+        ...
+
+    def start_realtime_telemetry(self) -> None:
+        """Start the realtime telemetry background task.
+
+        This is called when the user dynamically enables the telemetry dashboard
+        by pressing the telemetry option in the UI without having passed the 'dashboard' parameter
+        at startup.
+        """
 
     async def summarize(self) -> list["MetricResult"]:
         """Generate MetricResult list with hierarchical tags for telemetry data.

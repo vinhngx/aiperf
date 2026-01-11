@@ -7,10 +7,15 @@ from unittest.mock import Mock, patch
 import pytest
 
 from aiperf.common.config import EndpointConfig, InputConfig, ServiceConfig, UserConfig
-from aiperf.common.enums import CustomDatasetType
+from aiperf.common.config.config_defaults import InputDefaults
+from aiperf.common.enums import (
+    CustomDatasetType,
+    DatasetSamplingStrategy,
+    PublicDatasetType,
+)
 from aiperf.common.messages.command_messages import ProfileConfigureCommand
 from aiperf.dataset.dataset_manager import DatasetManager
-from aiperf.dataset.dataset_samplers import SequentialSampler
+from aiperf.dataset.dataset_samplers import SequentialSampler, ShuffleSampler
 
 
 class TestDatasetManagerSequentialIteration:
@@ -220,3 +225,264 @@ class TestDatasetManagerSequentialIteration:
 
         finally:
             Path(filename).unlink(missing_ok=True)
+
+    @pytest.mark.asyncio
+    @patch("aiperf.common.tokenizer.Tokenizer.from_pretrained")
+    async def test_dataset_timing_request_for_multi_turn_conversations(
+        self,
+        mock_tokenizer_from_pretrained,
+        create_mooncake_trace_file,
+        mock_tokenizer_cls,
+    ):
+        """Test that dataset timing request returns first turn timestamp for each conversation.
+
+        When a dataset has multiple turns per conversation, the timing dataset should:
+        - Return one entry per conversation (not one per turn)
+        - Use the first turn's timestamp for scheduling
+        - All turns within a conversation are sent sequentially after the conversation is scheduled
+        """
+        # Mock the tokenizer to avoid HTTP requests
+        mock_tokenizer_from_pretrained.return_value = (
+            mock_tokenizer_cls.from_pretrained("test-model")
+        )
+
+        # Create a file with multi-turn conversations
+        entries = [
+            '{"session_id": "sess-1", "timestamp": 0, "input_length": 50, "output_length": 10}',
+            '{"session_id": "sess-1", "delay": 10000, "input_length": 50, "output_length": 10}',
+            '{"session_id": "sess-1", "delay": 10000, "input_length": 100, "output_length": 10}',
+            '{"session_id": "sess-2", "timestamp": 20000, "input_length": 25, "output_length": 20}',
+            '{"session_id": "sess-2", "delay": 10000, "input_length": 10000, "output_length": 20}',
+        ]
+        filename = create_mooncake_trace_file(entries)
+
+        try:
+            user_config = UserConfig(
+                endpoint=EndpointConfig(model_names=["test-model"]),
+                input=InputConfig(
+                    file=filename, custom_dataset_type=CustomDatasetType.MOONCAKE_TRACE
+                ),
+            )
+
+            service_config = ServiceConfig()
+            dataset_manager = DatasetManager(service_config, user_config)
+
+            await dataset_manager.initialize()
+
+            # Configure the dataset to load conversations
+            await dataset_manager._profile_configure_command(
+                ProfileConfigureCommand(config=user_config, service_id="test_service")
+            )
+
+            # Request timing data
+            from aiperf.common.messages import DatasetTimingRequest
+
+            timing_response = await dataset_manager._handle_dataset_timing_request(
+                DatasetTimingRequest(service_id="test_service")
+            )
+
+            # Verify timing dataset structure
+            assert len(timing_response.timing_data) == 2  # 2 conversations, not 5 turns
+
+            # Extract timing data for easier testing
+            timing_dict = {
+                conv_id: timestamp for timestamp, conv_id in timing_response.timing_data
+            }
+
+            # Verify session 1 is scheduled at its first turn's timestamp (0)
+            assert "sess-1" in timing_dict
+            assert timing_dict["sess-1"] == 0
+
+            # Verify session 2 is scheduled at its first turn's timestamp (20000)
+            assert "sess-2" in timing_dict
+            assert timing_dict["sess-2"] == 20000
+
+            # Verify no duplicate session IDs (one per conversation, not per turn)
+            session_ids = [conv_id for _, conv_id in timing_response.timing_data]
+            assert len(session_ids) == len(set(session_ids))
+
+            # Test with conversations containing empty turns (should be skipped)
+            # Manually add a conversation with no turns to dataset
+            from aiperf.common.models import Conversation
+
+            empty_conversation = Conversation(
+                session_id="empty-session",
+                turns=[],  # Empty turns list
+            )
+            dataset_manager.dataset["empty-session"] = empty_conversation
+
+            # Request timing data again
+            timing_response_with_empty = (
+                await dataset_manager._handle_dataset_timing_request(
+                    DatasetTimingRequest(service_id="test_service")
+                )
+            )
+
+            # Verify empty conversation is skipped - should still have 2 entries, not 3
+            assert len(timing_response_with_empty.timing_data) == 2
+            timing_dict_with_empty = {
+                conv_id: timestamp
+                for timestamp, conv_id in timing_response_with_empty.timing_data
+            }
+            # Empty session should not be in timing data
+            assert "empty-session" not in timing_dict_with_empty
+            assert "sess-1" in timing_dict_with_empty
+            assert "sess-2" in timing_dict_with_empty
+
+        finally:
+            Path(filename).unlink(missing_ok=True)
+
+
+class TestDatasetManagerSamplingStrategyDefaults:
+    """Test default sampling strategy behavior for different dataset types."""
+
+    @pytest.fixture(autouse=True)
+    async def teardown(self):
+        """Clean up after each test to prevent shared state issues."""
+        yield
+        from aiperf.common.factories import CommunicationFactory
+
+        if hasattr(CommunicationFactory, "_instances"):
+            CommunicationFactory._instances.clear()
+
+    @pytest.mark.asyncio
+    @patch("aiperf.common.tokenizer.Tokenizer.from_pretrained")
+    @patch("aiperf.dataset.loader.sharegpt.ShareGPTLoader.load_dataset")
+    @patch("aiperf.dataset.loader.sharegpt.ShareGPTLoader.convert_to_conversations")
+    async def test_public_dataset_uses_loader_recommended_strategy(
+        self,
+        mock_convert,
+        mock_load,
+        mock_tokenizer_from_pretrained,
+        mock_tokenizer_cls,
+    ):
+        """Test that public datasets use the loader's recommended sampling strategy."""
+        from aiperf.common.models import Conversation, Text, Turn
+
+        # Mock tokenizer
+        mock_tokenizer_from_pretrained.return_value = (
+            mock_tokenizer_cls.from_pretrained("test-model")
+        )
+
+        # Mock dataset loading
+        mock_load.return_value = {}
+        mock_convert.return_value = [
+            Conversation(
+                session_id="session-1",
+                turns=[Turn(texts=[Text(contents=["Hello"])], model="test-model")],
+            ),
+            Conversation(
+                session_id="session-2",
+                turns=[Turn(texts=[Text(contents=["World"])], model="test-model")],
+            ),
+        ]
+
+        # Create config with public dataset and NO explicit sampling strategy
+        user_config = UserConfig(
+            endpoint=EndpointConfig(model_names=["test-model"]),
+            input=InputConfig(public_dataset=PublicDatasetType.SHAREGPT),
+        )
+        assert user_config.input.dataset_sampling_strategy is None
+
+        service_config = ServiceConfig()
+        dataset_manager = DatasetManager(service_config, user_config)
+
+        await dataset_manager.initialize()
+        await dataset_manager._profile_configure_command(
+            ProfileConfigureCommand(config=user_config, service_id="test_service")
+        )
+
+        # Verify the loader's recommended strategy was used (SEQUENTIAL for ShareGPT)
+        assert (
+            user_config.input.dataset_sampling_strategy
+            == DatasetSamplingStrategy.SEQUENTIAL
+        )
+        assert dataset_manager._dataset_sampler is not None
+        assert isinstance(dataset_manager._dataset_sampler, SequentialSampler)
+
+    @pytest.mark.asyncio
+    @patch("aiperf.common.tokenizer.Tokenizer.from_pretrained")
+    async def test_fallback_default_when_strategy_not_set(
+        self,
+        mock_tokenizer_from_pretrained,
+        mock_tokenizer_cls,
+    ):
+        """Test that InputDefaults.DATASET_SAMPLING_STRATEGY is used as fallback."""
+        # Mock tokenizer
+        mock_tokenizer_from_pretrained.return_value = (
+            mock_tokenizer_cls.from_pretrained("test-model")
+        )
+
+        # Create config with NO public dataset and NO explicit sampling strategy
+        # This will use synthetic dataset generation
+        user_config = UserConfig(
+            endpoint=EndpointConfig(model_names=["test-model"]),
+            input=InputConfig(),  # No public_dataset, no file - uses synthetic
+        )
+
+        service_config = ServiceConfig()
+        dataset_manager = DatasetManager(service_config, user_config)
+
+        await dataset_manager.initialize()
+        await dataset_manager._profile_configure_command(
+            ProfileConfigureCommand(config=user_config, service_id="test_service")
+        )
+
+        # Synthetic composer sets its own default, which should be the same as InputDefaults
+        assert user_config.input.dataset_sampling_strategy is not None
+        assert (
+            user_config.input.dataset_sampling_strategy
+            == InputDefaults.DATASET_SAMPLING_STRATEGY
+        )
+
+    @pytest.mark.asyncio
+    @patch("aiperf.common.tokenizer.Tokenizer.from_pretrained")
+    @patch("aiperf.dataset.loader.sharegpt.ShareGPTLoader.load_dataset")
+    @patch("aiperf.dataset.loader.sharegpt.ShareGPTLoader.convert_to_conversations")
+    async def test_explicit_strategy_overrides_loader_recommendation(
+        self,
+        mock_convert,
+        mock_load,
+        mock_tokenizer_from_pretrained,
+        mock_tokenizer_cls,
+    ):
+        """Test that explicitly set strategy is not overridden by loader recommendation."""
+        from aiperf.common.models import Conversation, Text, Turn
+
+        # Mock tokenizer
+        mock_tokenizer_from_pretrained.return_value = (
+            mock_tokenizer_cls.from_pretrained("test-model")
+        )
+
+        # Mock dataset loading
+        mock_load.return_value = {}
+        mock_convert.return_value = [
+            Conversation(
+                session_id="session-1",
+                turns=[Turn(texts=[Text(contents=["Hello"])], model="test-model")],
+            ),
+        ]
+
+        # Create config with explicit SHUFFLE strategy (different from loader's SEQUENTIAL)
+        user_config = UserConfig(
+            endpoint=EndpointConfig(model_names=["test-model"]),
+            input=InputConfig(
+                public_dataset=PublicDatasetType.SHAREGPT,
+                dataset_sampling_strategy=DatasetSamplingStrategy.SHUFFLE,
+            ),
+        )
+
+        service_config = ServiceConfig()
+        dataset_manager = DatasetManager(service_config, user_config)
+
+        await dataset_manager.initialize()
+        await dataset_manager._profile_configure_command(
+            ProfileConfigureCommand(config=user_config, service_id="test_service")
+        )
+
+        # Verify the explicit strategy was preserved, not overwritten by loader's SEQUENTIAL
+        assert (
+            user_config.input.dataset_sampling_strategy
+            == DatasetSamplingStrategy.SHUFFLE
+        )
+        assert isinstance(dataset_manager._dataset_sampler, ShuffleSampler)

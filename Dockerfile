@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 FROM python:3.13-slim-bookworm AS base
 
@@ -94,9 +94,9 @@ RUN apt-get update -y && \
     && rm -rf /var/lib/apt/lists/*
 
 # Download and build ffmpeg with libvpx (VP9 codec)
-RUN wget https://ffmpeg.org/releases/ffmpeg-7.1.tar.xz \
-    && tar -xf ffmpeg-7.1.tar.xz \
-    && cd ffmpeg-7.1 \
+RUN wget https://ffmpeg.org/releases/ffmpeg-8.0.1.tar.xz \
+    && tar -xf ffmpeg-8.0.1.tar.xz \
+    && cd ffmpeg-8.0.1 \
     && ./configure \
         --prefix=/opt/ffmpeg \
         --disable-gpl \
@@ -112,7 +112,7 @@ RUN wget https://ffmpeg.org/releases/ffmpeg-7.1.tar.xz \
     && make -j$(nproc) \
     && make install \
     && cd .. \
-    && rm -rf ffmpeg-7.1 ffmpeg-7.1.tar.xz \
+    && rm -rf ffmpeg-8.0.1 ffmpeg-8.0.1.tar.xz \
     && cp -P /usr/lib/*/libvpx.so* /opt/ffmpeg/lib/ 2>/dev/null || \
        cp -P /usr/lib/libvpx.so* /opt/ffmpeg/lib/ 2>/dev/null || { echo "Error: libvpx.so not found"; exit 1; }
 
@@ -133,7 +133,7 @@ RUN uv pip install /dist/aiperf-*.whl \
 ############################################
 ############# Runtime Image ################
 ############################################
-FROM nvcr.io/nvidia/distroless/python:3.13-v3.1.1-dev AS runtime
+FROM nvcr.io/nvidia/distroless/python:3.13-v3.1.2-dev AS runtime
 
 # Include license and attribution files
 COPY LICENSE ATTRIBUTIONS*.md /legal/

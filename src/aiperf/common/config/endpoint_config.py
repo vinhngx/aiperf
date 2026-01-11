@@ -12,7 +12,12 @@ from aiperf.common.config.cli_parameter import CLIParameter
 from aiperf.common.config.config_defaults import EndpointDefaults
 from aiperf.common.config.config_validators import parse_str_or_list
 from aiperf.common.config.groups import Groups
-from aiperf.common.enums import EndpointType, ModelSelectionStrategy, TransportType
+from aiperf.common.enums import (
+    ConnectionReuseStrategy,
+    EndpointType,
+    ModelSelectionStrategy,
+    TransportType,
+)
 
 _logger = AIPerfLogger(__name__)
 
@@ -166,3 +171,49 @@ class EndpointConfig(BaseConfig):
             group=_CLI_GROUP,
         ),
     ] = None
+
+    use_legacy_max_tokens: Annotated[
+        bool,
+        Field(
+            description="Use the legacy 'max_tokens' field instead of 'max_completion_tokens' in request payloads. "
+            "The OpenAI API now prefers 'max_completion_tokens', but some older APIs or implementations may require 'max_tokens'.",
+        ),
+        CLIParameter(
+            name=("--use-legacy-max-tokens",),
+            group=_CLI_GROUP,
+        ),
+    ] = EndpointDefaults.USE_LEGACY_MAX_TOKENS
+
+    use_server_token_count: Annotated[
+        bool,
+        Field(
+            description=(
+                "Use server-reported token counts from API usage fields instead of "
+                "client-side tokenization. When enabled, tokenizers are still loaded "
+                "(needed for dataset generation) but tokenizer.encode() is not called "
+                "for computing metrics. Token count fields will be None if the server "
+                "does not provide usage information. For OpenAI-compatible streaming "
+                "endpoints (chat/completions), stream_options.include_usage is automatically "
+                "configured when this flag is enabled."
+            ),
+        ),
+        CLIParameter(
+            name=("--use-server-token-count",),
+            group=_CLI_GROUP,
+        ),
+    ] = EndpointDefaults.USE_SERVER_TOKEN_COUNT
+
+    connection_reuse_strategy: Annotated[
+        ConnectionReuseStrategy,
+        Field(
+            description=(
+                "Transport connection reuse strategy. "
+                "'pooled' (default): connections are pooled and reused across all requests. "
+                "'never': new connection for each request, closed after response. "
+            ),
+        ),
+        CLIParameter(
+            name=("--connection-reuse-strategy",),
+            group=_CLI_GROUP,
+        ),
+    ] = EndpointDefaults.CONNECTION_REUSE_STRATEGY

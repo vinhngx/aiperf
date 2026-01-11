@@ -16,7 +16,7 @@ from pydantic import (
 from typing_extensions import Self
 
 from aiperf.common.aiperf_logger import AIPerfLogger
-from aiperf.common.constants import NANOS_PER_SECOND, STAT_KEYS
+from aiperf.common.constants import STAT_KEYS
 from aiperf.common.enums import CreditPhase, SSEFieldType
 from aiperf.common.enums.metric_enums import MetricValueTypeT
 from aiperf.common.exceptions import InvalidInferenceResultError
@@ -133,6 +133,8 @@ class MetricRecordMetadata(AIPerfBaseModel):
 
 
 class ProfileResults(AIPerfBaseModel):
+    """The results of a profile run."""
+
     records: list[MetricResult] | None = Field(
         ..., description="The records of the profile results"
     )
@@ -625,6 +627,51 @@ class RankingsResponseData(BaseResponseData):
     )
 
 
+class ImageDataItem(AIPerfBaseModel):
+    """Parsed image item response data."""
+
+    url: str | None = Field(
+        default=None,
+        description="The URL of the generated image.",
+    )
+    b64_json: str | None = Field(
+        default=None,
+        description="The base64 encoded image.",
+    )
+    revised_prompt: str | None = Field(
+        default=None,
+        description="The revised prompt that was used for image generation.",
+    )
+    partial_image_index: int | None = Field(
+        default=None,
+        description="The index of the partial image in the response.",
+    )
+
+
+class ImageResponseData(BaseResponseData):
+    """Parsed image response data."""
+
+    images: list[ImageDataItem] = Field(
+        default_factory=list, description="The generated images from the response."
+    )
+    size: str | None = Field(
+        default=None,
+        description="The size of the generated images.",
+    )
+    quality: str | None = Field(
+        default=None,
+        description="The quality of the generated images.",
+    )
+    output_format: str | None = Field(
+        default=None,
+        description="The output format of the generated images.",
+    )
+    background: str | None = Field(
+        default=None,
+        description="The background of the generated images.",
+    )
+
+
 class ParsedResponse(AIPerfBaseModel):
     """Parsed response from a inference client."""
 
@@ -636,6 +683,7 @@ class ParsedResponse(AIPerfBaseModel):
         | TextResponseData
         | EmbeddingResponseData
         | RankingsResponseData
+        | ImageResponseData
         | BaseResponseData
         | None
     ] = Field(
@@ -661,22 +709,31 @@ class ParsedResponse(AIPerfBaseModel):
     )
 
 
+class TokenCounts(AIPerfBaseModel):
+    """Token counts for a record."""
+
+    input: int | None = Field(
+        default=None,
+        description="The number of tokens in the input. If None, the number of tokens could not be calculated.",
+    )
+    output: int | None = Field(
+        default=None,
+        description="The number of output tokens across all responses. If None, the number of tokens could not be calculated.",
+    )
+    reasoning: int | None = Field(
+        default=None,
+        description="The number of reasoning tokens across all responses. If None, the number of tokens could not be calculated, or the model does not support reasoning.",
+    )
+
+
 class ParsedResponseRecord(AIPerfBaseModel):
     """Record of a request and its associated responses, already parsed and ready for metrics."""
 
-    request: RequestRecord = Field(description="The original request record")
-    responses: list[ParsedResponse] = Field(description="The parsed responses.")
-    input_token_count: int | None = Field(
+    request: RequestRecord = Field(..., description="The original request record")
+    responses: list[ParsedResponse] = Field(..., description="The parsed responses.")
+    token_counts: TokenCounts | None = Field(
         default=None,
-        description="The number of tokens in the input (client-side tokenization). If None, the number of tokens could not be calculated.",
-    )
-    output_token_count: int | None = Field(
-        default=None,
-        description="The number of output tokens across all responses (client-side tokenization). If None, the number of tokens could not be calculated.",
-    )
-    reasoning_token_count: int | None = Field(
-        default=None,
-        description="The number of reasoning tokens across all responses (client-side tokenization). If None, the number of tokens could not be calculated, or the model does not support reasoning.",
+        description="The token counts for the response. If None, the token counts could not be calculated.",
     )
 
     @cached_property
@@ -714,19 +771,7 @@ class ParsedResponseRecord(AIPerfBaseModel):
         """
         return [response for response in self.responses if response.data]
 
-    @cached_property
-    def request_duration_ns(self) -> int:
-        """Get the duration of the request in nanoseconds."""
-        return self.end_perf_ns - self.start_perf_ns
-
-    @cached_property
-    def tokens_per_second(self) -> float | None:
-        """Get the number of tokens per second of the request."""
-        if self.output_token_count is None or self.request_duration_ns == 0:
-            return None
-        return self.output_token_count / (self.request_duration_ns / NANOS_PER_SECOND)
-
-    @cached_property
+    @property
     def has_error(self) -> bool:
         """Check if the response record has an error."""
         return self.request.has_error
@@ -750,6 +795,28 @@ class ParsedResponseRecord(AIPerfBaseModel):
             and 0 <= self.start_perf_ns < self.end_perf_ns < sys.maxsize
             and all(0 < response.perf_ns < sys.maxsize for response in self.responses)
         )
+
+    def create_error_from_invalid(self) -> None:
+        """Convert any invalid request records to error records for combined processing."""
+        if not self.valid and not self.has_error:
+            _logger.debug(
+                lambda: f"Converting invalid request record to error record: {self}"
+            )
+            err = InvalidInferenceResultError("Invalid inference result")
+            if len(self.responses) == 0 or len(self.content_responses) == 0:
+                err.add_note(
+                    "No responses with actual content were received from the server (only usage/metadata, null/empty data, or [DONE] markers)"
+                )
+            if self.start_perf_ns <= 0 or self.start_perf_ns >= sys.maxsize:
+                err.add_note(
+                    f"Start perf ns timestamp is invalid: {self.start_perf_ns}"
+                )
+            for i, response in enumerate(self.responses):
+                if response.perf_ns <= 0 or response.perf_ns >= sys.maxsize:
+                    err.add_note(
+                        f"Response {i} perf ns timestamp is invalid: {response.perf_ns}"
+                    )
+            self.request.error = ErrorDetails.from_exception(err)
 
 
 class RequestInfo(AIPerfBaseModel):
@@ -805,6 +872,16 @@ class RequestInfo(AIPerfBaseModel):
     conversation_id: str | None = Field(
         default=None,
         description="The ID of the conversation (if applicable).",
+    )
+    system_message: str | None = Field(
+        default=None,
+        description="Optional shared system message to prepend to the first turn. "
+        "Extracted from conversation.system_message at request time.",
+    )
+    user_context_message: str | None = Field(
+        default=None,
+        description="Optional per-conversation user context message to prepend to the first turn. "
+        "Extracted from conversation.user_context_message at request time.",
     )
 
 

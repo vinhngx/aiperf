@@ -11,6 +11,7 @@ import asyncio
 import logging
 from collections.abc import Callable, Generator
 from io import BytesIO
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
@@ -30,8 +31,10 @@ from aiperf.common.models import (
     TextResponseData,
     Turn,
 )
+from aiperf.common.models.record_models import TokenCounts
 from aiperf.common.tokenizer import Tokenizer
 from aiperf.common.types import MessageTypeT
+from aiperf.exporters.exporter_config import ExporterConfig
 from aiperf.module_loader import ensure_modules_loaded
 
 
@@ -386,8 +389,11 @@ def sample_parsed_record(sample_request_record: RequestRecord) -> ParsedResponse
     return ParsedResponseRecord(
         request=sample_request_record,
         responses=responses,
-        input_token_count=DEFAULT_INPUT_TOKENS,
-        output_token_count=DEFAULT_OUTPUT_TOKENS,
+        token_counts=TokenCounts(
+            input=DEFAULT_INPUT_TOKENS,
+            output=DEFAULT_OUTPUT_TOKENS,
+            reasoning=None,
+        ),
     )
 
 
@@ -527,3 +533,28 @@ def mock_linux_child_process(
     """Mock Linux child process environment (Linux platform + child process)."""
     mock_current_process.return_value = mock_macos_child_process
     return mock_current_process
+
+
+@pytest.fixture
+def tmp_artifact_dir(tmp_path: Path) -> Path:
+    """Create a temporary artifact directory for testing."""
+    artifact_dir = tmp_path / "artifacts"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    return artifact_dir
+
+
+def create_exporter_config(
+    profile_results,
+    user_config,
+    telemetry_results=None,
+    server_metrics_results=None,
+    verbose=True,
+):
+    """Helper to create ExporterConfig with common defaults."""
+    return ExporterConfig(
+        results=profile_results,
+        user_config=user_config,
+        service_config=ServiceConfig(verbose=verbose),
+        telemetry_results=telemetry_results,
+        server_metrics_results=server_metrics_results,
+    )
