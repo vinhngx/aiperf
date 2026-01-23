@@ -8,13 +8,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aiperf-mock-server"
-version = "0.4.0"
+version = "0.5.0"
 description = "AIPerf FastAPI-based OpenAI mock server for AI performance testing"
 authors = []
 dependencies = [
     "fastapi>=0.104.1",
     "uvicorn[standard]>=0.24.0",
-    "transformers>=4.57.3",  # NOTE: Versions prior to 4.57.3 have CVE vulnerabilities
+    "transformers>=4.56.0", # Lowest compatible version for dynamo backends
     "pydantic>=2.5.0",
     "pydantic-settings>=2.0.0",
     "cyclopts>=3.0.0",

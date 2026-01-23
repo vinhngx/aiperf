@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0
 -->
 
@@ -78,6 +78,7 @@ aiperf profile \
     --url localhost:8000 \
     --input-file precise_schedule.jsonl \
     --custom-dataset-type mooncake_trace \
+    --fixed-schedule \
     --fixed-schedule-auto-offset
 ```
 <!-- /aiperf-run-vllm-default-openai-endpoint-server -->
@@ -102,6 +103,7 @@ aiperf profile \
     --url localhost:8000 \
     --input-file precise_schedule.jsonl \
     --custom-dataset-type mooncake_trace \
+    --fixed-schedule \
     --fixed-schedule-start-offset 2000 \
     --fixed-schedule-end-offset 4000
 ```
@@ -125,6 +127,6 @@ aiperf profile \
 
 ## Related Tutorials
 
-- [Trace Benchmarking](trace-benchmarking.md) - For deterministic request patterns
+- [Custom Prompt Benchmarking](custom-prompt-benchmarking.md) - For sending custom prompts without timing control
 - [Time-based Benchmarking](time-based-benchmarking.md) - For duration-based testing
 - [Request Cancellation](request-cancellation.md) - For timeout testing
