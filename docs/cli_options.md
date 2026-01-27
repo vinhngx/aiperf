@@ -110,6 +110,7 @@ The API endpoint type to benchmark. Determines request/response format and suppo
 | `hf_tei_rankings` |  | HuggingFace Text Embeddings Inference (TEI) Rankings API. Reranks passages based on query relevance. |
 | `huggingface_generate` |  | HuggingFace Text Generation Inference (TGI) API. Supports both /generate and /generate_stream endpoints. |
 | `image_generation` |  | OpenAI Image Generation API. Generates images from text prompts (e.g., FLUX.1). |
+| `nim_embeddings` |  | NVIDIA NIM Embeddings API. Generates vector embeddings for text (and image inputs). |
 | `nim_rankings` |  | NVIDIA NIM Rankings API. Ranks passages by relevance scores for a given query. |
 | `solido_rag` |  | SOLIDO RAG API. Retrieval-Augmented Generation endpoint with filter and inference model support. |
 | `template` |  | Custom template endpoint. Uses Jinja2 templates for flexible payload formatting. |
@@ -485,7 +486,7 @@ Multiplier for core prefix branch lengths in radix tree.
 
 #### `--synthesis-prefix-root-multiplier` `<int>`
 
-Number of times to replicate the radix tree structure.
+Number of independent radix trees to distribute traces across.
 <br>_Default: `1`_
 
 #### `--synthesis-prompt-len-multiplier` `<float>`
@@ -495,7 +496,11 @@ Multiplier for leaf path (unique prompt) lengths.
 
 #### `--synthesis-max-isl` `<int>`
 
-Maximum input sequence length to include in synthesis.
+Maximum input sequence length for filtering. Traces with input_length > max_isl are skipped.
+
+#### `--synthesis-max-osl` `<int>`
+
+Maximum output sequence length cap. Traces with output_length > max_osl are capped to max_osl.
 
 ### Conversation Input
 
